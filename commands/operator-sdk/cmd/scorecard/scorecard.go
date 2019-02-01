@@ -108,6 +108,9 @@ func ScorecardTests(cmd *cobra.Command, args []string) error {
 	if pullPolicy != "Always" && pullPolicy != "Never" && pullPolicy != "PullIfNotPresent" {
 		return fmt.Errorf("invalid proxy pull policy: (%s); valid values: Always, Never, PullIfNotPresent", pullPolicy)
 	}
+	if err = userDefinedTests(); err != nil {
+		return err
+	}
 	cmd.SilenceUsage = true
 	if viper.GetBool(VerboseOpt) {
 		log.SetLevel(log.DebugLevel)
