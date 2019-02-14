@@ -15,12 +15,15 @@
 package scorecard
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 
 	"github.com/ghodss/yaml"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
@@ -30,16 +33,25 @@ import (
 type UserDefinedTest struct {
 	// Path to cr to be used for testing
 	CRPath string `mapstructure:"cr"`
-	// Resources expected to be created after the operator reacts to the CR
-	ExpectedResources []ExpectedResource `mapstructure:"expected_resources"`
-	// Expected values in CR's status after the operator reacts to the CR
-	ExpectedStatus map[string]interface{} `mapstructure:"expected_status"`
+	// Expected resources and status
+	Expected Expected `mapstructure:"expected"`
 	// Sub-tests modifying a few fields with expected changes
 	Modifications []Modification `mapstructure:"modifications"`
 }
 
+type Expected struct {
+	// Resources expected to be created after the operator reacts to the CR
+	Resources []ExpectedResource `mapstructure:"resources"`
+	// Expected values in CR's status after the operator reacts to the CR
+	Status map[string]interface{} `mapstructure:"status"`
+}
+
 // Struct containing a resource and its expected fields
 type ExpectedResource struct {
+	// (if set) Namespace of resource
+	Namespace string `mapstructure:"namespace"`
+	// APIVersion of resource
+	APIVersion string `mapstructure:"apiversion"`
 	// Kind of resource
 	Kind string `mapstructure:"kind"`
 	// Name of resource
@@ -52,10 +64,8 @@ type ExpectedResource struct {
 type Modification struct {
 	// a map of the spec fields to modify
 	Spec map[string]interface{} `mapstructure:"spec"`
-	// the resources we expect to be created after the spec fields are modified
-	ExpectedResources []ExpectedResource `mapstructure:"expected_resources"`
-	// the status we expect to see after the spec fields are modified
-	ExpectedStatus map[string]interface{} `mapstructure:"expected_status"`
+	// Expected resources and status
+	Expected Expected `mapstructure:"expected"`
 }
 
 // castToMap takes an interface and attempts to convert it to
@@ -67,6 +77,10 @@ func castToMap(i interface{}) (map[string]interface{}, error) {
 	retVal := make(map[string]interface{})
 	origMap, ok := i.(map[interface{}]interface{})
 	if !ok {
+		origMap, ok := i.(map[string]interface{})
+		if ok {
+			return origMap, nil
+		}
 		return nil, errors.New("Interface is not a map[interface{}]interface{}")
 	}
 	for key, val := range origMap {
@@ -79,6 +93,27 @@ func castToMap(i interface{}) (map[string]interface{}, error) {
 	return retVal, nil
 }
 
+func isNum(i interface{}) bool {
+	switch reflect.ValueOf(i).Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
+	}
+}
+
+func convertToFloat64(i interface{}) (float64, error) {
+	valueOf := reflect.ValueOf(i)
+	switch valueOf.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return float64(valueOf.Int()), nil
+	case reflect.Float32, reflect.Float64:
+		return valueOf.Float(), nil
+	default:
+		return 0, fmt.Errorf("Type %s is not a number", valueOf.Kind())
+	}
+}
+
 func interfaceChecker(key string, main, sub interface{}) bool {
 	mainValue := reflect.ValueOf(main)
 	subValue := reflect.ValueOf(sub)
@@ -89,6 +124,7 @@ func interfaceChecker(key string, main, sub interface{}) bool {
 		case reflect.Slice:
 			match = sliceIsSubset(key, main.([]interface{}), sub.([]interface{}))
 		default:
+			log.Infof("In slice mismatch case for key %s", key)
 			scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due mismatched type for: %s", key))
 			return false
 		}
@@ -105,20 +141,46 @@ func interfaceChecker(key string, main, sub interface{}) bool {
 			}
 			match = mapIsSubset(mainMap, subMap)
 		default:
+			log.Infof("In map mismatch case for key %s", key)
 			scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due mismatched type for: %s", key))
 			return false
 		}
 	default:
-		if !reflect.DeepEqual(main, sub) {
-			match = false
+		log.Infof("MainKind: %s", mainValue.Kind())
+		log.Infof("SubKind: %s", subValue.Kind())
+		// Sometimes, one parser will decide a number is an int while the another parser says float
+		// For these cases, we cast both numbers to floats
+		nums := false
+		var num1, num2 float64
+		if isNum(main) && isNum(sub) {
+			var err error
+			nums = true
+			num1, err = convertToFloat64(main)
+			if err != nil {
+				// TODO: handle this situation differently...
+				return false
+			}
+			num2, err = convertToFloat64(sub)
+			if err != nil {
+				// TODO: handle this situation differently...
+				return false
+			}
+		}
+		if nums {
+			match = (num1 == num2)
+		} else {
+			match = reflect.DeepEqual(main, sub)
+		}
+		if !match {
+			log.Infof("%+v != %+v", main, sub)
 		}
 	}
 	if !match {
+		log.Infof("In the case for key %s", key)
 		// TODO: change this test to make it able to continue checking other values instead of failing fast
 		scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due nonmatching value for: %s", key))
-		return false
 	}
-	return true
+	return match
 }
 
 func sliceIsSubset(key string, bigSlice, subSlice []interface{}) bool {
@@ -126,7 +188,7 @@ func sliceIsSubset(key string, bigSlice, subSlice []interface{}) bool {
 		return false
 	}
 	for index, value := range subSlice {
-		if interfaceChecker(key, bigSlice[index], value) {
+		if !interfaceChecker(key, bigSlice[index], value) {
 			// TODO: change this test to make it able to continue checking other values instead of failing fast
 			scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due nonmatching value for: %s", key))
 			return false
@@ -142,7 +204,7 @@ func mapIsSubset(bigMap, subMap map[string]interface{}) bool {
 			scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due to missing field in resource: %s", key))
 			return false
 		}
-		if interfaceChecker(key, bigMap[key], value) {
+		if !interfaceChecker(key, bigMap[key], value) {
 			// TODO: change this test to make it able to continue checking other values instead of failing fast
 			scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due nonmatching value for: %s", key))
 			return false
@@ -152,7 +214,7 @@ func mapIsSubset(bigMap, subMap map[string]interface{}) bool {
 }
 
 func scorecareFunctionLength(expected, actual interface{}) bool {
-	expectedSlice, ok := expected.([]interface{})
+	expectedSliceLength, ok := expected.(int)
 	if !ok {
 		return false
 	}
@@ -160,33 +222,25 @@ func scorecareFunctionLength(expected, actual interface{}) bool {
 	if !ok {
 		return false
 	}
-	return len(expectedSlice) == len(actualSlice)
+	return expectedSliceLength == len(actualSlice)
 }
 
-// getMatchingLeaves walks to the end of the config map and gets the field that that corresponds to in the manifest map
-// Used for scorecard functions. Returns an array of maps in this form, where each array element is one leaf:
-// {
-//	config:
-//		configValInterface
-//	manifest:
-//		manifestValInterface
-// }
-func getMatchingLeaves(config, manifest map[string]interface{}) ([]map[string]interface{}, error) {
+func getMatchingLeavesMap(config, manifest map[string]interface{}) ([]map[string]interface{}, error) {
 	retVal := make([]map[string]interface{}, 1, 1)
 	for key, val := range config {
-		if reflect.ValueOf(val).Kind() == reflect.Map {
-			valMap, err := castToMap(val)
-			if err != nil {
-				return nil, err
-			}
-			manKeyMap, err := castToMap(manifest[key])
-			if err != nil {
-				return nil, err
-			}
-			newLeaves, err := getMatchingLeaves(valMap, manKeyMap)
-			if err != nil {
-				return nil, err
-			}
+		if manifest[key] == nil {
+			return nil, nil
+		}
+		newLeaves, err := getMatchingLeaves(val, manifest[key])
+		if err != nil {
+			return retVal, err
+		}
+		if newLeaves == nil {
+			newMap := make(map[string]interface{})
+			newMap["config"] = val
+			newMap["manifest"] = manifest[key]
+			retVal = append(retVal, newMap)
+		} else {
 			retVal = append(retVal, newLeaves...)
 		}
 	}
@@ -197,12 +251,31 @@ func getMatchingLeaves(config, manifest map[string]interface{}) ([]map[string]in
 func getMatchingLeavesArray(config, manifest []interface{}) ([]map[string]interface{}, error) {
 	retVal := make([]map[string]interface{}, 1, 1)
 	for index, val := range config {
-
+		newLeaves, err := getMatchingLeaves(val, manifest[index])
+		if err != nil {
+			return retVal, err
+		}
+		if newLeaves == nil {
+			newMap := make(map[string]interface{})
+			newMap["config"] = val
+			newMap["manifest"] = manifest[index]
+			retVal = append(retVal, newMap)
+		} else {
+			retVal = append(retVal, newLeaves...)
+		}
 	}
-	return nil, nil
+	return retVal, nil
 }
 
-func getMatchingLeavesParser(config, manifest interface{}) ([]map[string]interface{}, error) {
+// getMatchingLeaves walks to the end of the config map and gets the field that that corresponds to in the manifest map
+// Used for scorecard functions. Returns an array of maps in this form, where each array element is one leaf:
+// {
+//	config:
+//		configValInterface
+//	manifest:
+//		manifestValInterface
+// }
+func getMatchingLeaves(config, manifest interface{}) ([]map[string]interface{}, error) {
 	if reflect.ValueOf(config).Kind() == reflect.Map {
 		configMap, err := castToMap(config)
 		if err != nil {
@@ -212,7 +285,7 @@ func getMatchingLeavesParser(config, manifest interface{}) ([]map[string]interfa
 		if err != nil {
 			return nil, err
 		}
-		return getMatchingLeaves(configMap, manMap)
+		return getMatchingLeavesMap(configMap, manMap)
 	}
 	if reflect.ValueOf(config).Kind() == reflect.Slice {
 		configSlice, ok := config.([]interface{})
@@ -229,24 +302,35 @@ func getMatchingLeavesParser(config, manifest interface{}) ([]map[string]interfa
 }
 
 func runScorecardFunction(expected, actual map[string]interface{}, function func(expected, actual interface{}) bool) bool {
-	return false
+	results, err := getMatchingLeavesMap(expected, actual)
+	if err != nil {
+		log.Fatalf("Failed: %s", err)
+	}
+	// trim empty maps
+	for _, item := range results {
+		if len(item) != 0 && !function(item["config"], item["manifest"]) {
+			return false
+		}
+	}
+	return true
 }
 
 // compareManifests uses the config to verify that a manifest meets requirements specified by config
 func compareManifests(config, manifest map[string]interface{}) (bool, error) {
 	pass := true
+	log.Infof("Running for %+v", config)
 	for key, val := range config {
+		log.Infof("Running for %+v", val)
 		valMap, err := castToMap(val)
 		if err != nil {
-			return false, nil
-		}
-		manKeyMap, err := castToMap(manifest[key])
-		if err != nil {
+			log.Infof("Failed in valmap: %s", err)
 			return false, nil
 		}
 		if strings.HasPrefix(key, "scorecard_function_") {
+			log.Infof("Have prefix")
 			switch strings.TrimPrefix(key, "scorecard_function_") {
 			case "length":
+				log.Infof("Running scorecard function length")
 				if !runScorecardFunction(valMap, manifest, scorecareFunctionLength) {
 					pass = false
 				}
@@ -255,6 +339,12 @@ func compareManifests(config, manifest map[string]interface{}) (bool, error) {
 				pass = false
 			}
 			continue
+		}
+		log.Infof("Running for %+v", manifest[key])
+		manKeyMap, err := castToMap(manifest[key])
+		if err != nil {
+			log.Infof("Failed in manmap: %s", err)
+			return false, nil
 		}
 		if !mapIsSubset(manKeyMap, valMap) {
 			pass = false
@@ -278,13 +368,31 @@ func userDefinedTests() error {
 	if err != nil {
 		return err
 	}
-	log.Info(fmt.Sprintf("Is Dep Pass? %t", mapIsSubset(depYAMLUnmarshalled, userDefinedTests[0].ExpectedResources[0].Fields)))
+	log.Info(fmt.Sprintf("Is Dep Pass? %t", mapIsSubset(depYAMLUnmarshalled, userDefinedTests[0].Expected.Resources[0].Fields)))
 	statusYAMLUnmarshalled := make(map[string]interface{})
 	err = yaml.Unmarshal([]byte(statusYAML), &statusYAMLUnmarshalled)
 	if err != nil {
 		return err
 	}
-	log.Info(fmt.Sprintf("Is Status Pass? %t", mapIsSubset(statusYAMLUnmarshalled, userDefinedTests[0].ExpectedStatus)))
+	results, err := compareManifests(userDefinedTests[0].Expected.Status, statusYAMLUnmarshalled)
+	log.Infof("Ran compare manifests")
+	if err != nil {
+		return err
+	}
+	log.Info(fmt.Sprintf("Is Status Pass? %+v", results))
+	log.Info("Suggestions: %+v", scSuggestions)
+	log.Info("Trying to get dep")
+	unstruct := unstructured.Unstructured{}
+	unstruct.SetUnstructuredContent(depYAMLUnmarshalled)
+	log.Infof("Namespace: %s", unstruct.GetNamespace())
+	log.Infof("Name: %s", unstruct.GetName())
+	recvUnstruct := unstructured.Unstructured{}
+	recvUnstruct.SetGroupVersionKind(unstruct.GroupVersionKind())
+	err = runtimeClient.Get(context.TODO(), client.ObjectKey{Namespace: unstruct.GetNamespace(), Name: unstruct.GetName()}, &recvUnstruct)
+	if err != nil {
+		return err
+	}
+	log.Info(fmt.Sprintf("Is Dep Pass v2? %t", mapIsSubset(recvUnstruct.Object, userDefinedTests[0].Expected.Resources[0].Fields)))
 	return nil
 }
 
@@ -334,7 +442,7 @@ spec:
         - -o
         - modern
         - -v
-        image: memcached:1.4.36-alpinle
+        image: memcached:1.4.36-alpine
         imagePullPolicy: IfNotPresent
         name: memcached
         ports:
@@ -370,20 +478,7 @@ status:
   updatedReplicas: 3
 `
 
-const statusYAML = `apiVersion: cache.example.com/v1alpha1
-kind: Memcached
-metadata:
-  creationTimestamp: 2019-02-04T23:18:40Z
-  generation: 1
-  name: example-memcached
-  namespace: default
-  resourceVersion: "40528"
-  selfLink: /apis/cache.example.com/v1alpha1/namespaces/default/memcacheds/example-memcached
-  uid: 351f7078-28d3-11e9-9ade-3438e02bae33
-spec:
-  size: 3
-status:
-  nodes:
+const statusYAML = `nodes:
   - example-memcached-55dc4795d6-ggl5q
   - example-memcached-55dc4795d6-jxbvr
   - example-memcached-55dc4795d6-xxz55

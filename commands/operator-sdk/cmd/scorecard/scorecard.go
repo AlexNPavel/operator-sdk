@@ -55,6 +55,7 @@ const (
 	CRManifestOpt         = "cr-manifest"
 	ProxyImageOpt         = "proxy-image"
 	ProxyPullPolicyOpt    = "proxy-pull-policy"
+	CRDsDirOpt            = "crds-dir"
 	VerboseOpt            = "verbose"
 )
 
@@ -107,9 +108,6 @@ func ScorecardTests(cmd *cobra.Command, args []string) error {
 	pullPolicy := viper.GetString(ProxyPullPolicyOpt)
 	if pullPolicy != "Always" && pullPolicy != "Never" && pullPolicy != "PullIfNotPresent" {
 		return fmt.Errorf("invalid proxy pull policy: (%s); valid values: Always, Never, PullIfNotPresent", pullPolicy)
-	}
-	if err = userDefinedTests(); err != nil {
-		return err
 	}
 	cmd.SilenceUsage = true
 	if viper.GetBool(VerboseOpt) {
@@ -179,6 +177,9 @@ func ScorecardTests(cmd *cobra.Command, args []string) error {
 	restMapper = restmapper.NewDeferredDiscoveryRESTMapper(cachedDiscoveryClient)
 	restMapper.Reset()
 	runtimeClient, _ = client.New(kubeconfig, client.Options{Scheme: scheme, Mapper: restMapper})
+	if err = userDefinedTests(); err != nil {
+		return err
+	}
 	if err := createFromYAMLFile(viper.GetString(GlobalManifestOpt)); err != nil {
 		return fmt.Errorf("failed to create global resources: %v", err)
 	}
@@ -236,6 +237,10 @@ func ScorecardTests(cmd *cobra.Command, args []string) error {
 			csv = o
 		default:
 			return fmt.Errorf("provided yaml file not of ClusterServiceVersion type")
+		}
+		fmt.Println("Checking if all CRDs have validation")
+		if err := crdsHaveValidation(viper.GetString(CRDsDirOpt), runtimeClient, obj); err != nil {
+			return err
 		}
 		fmt.Println("Checking for CRD resources")
 		crdsHaveResources(csv)
@@ -298,7 +303,7 @@ func initConfig() error {
 	if err := viper.ReadInConfig(); err == nil {
 		log.Info("Using config file: ", viper.ConfigFileUsed())
 	} else {
-		log.Warn("Could not load config file; using only flags")
+		log.Warn("Could not load config file; using flags")
 	}
 	return nil
 }
