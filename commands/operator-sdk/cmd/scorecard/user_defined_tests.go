@@ -20,6 +20,11 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/ghodss/yaml"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -51,7 +56,7 @@ type ExpectedResource struct {
 	// (if set) Namespace of resource
 	Namespace string `mapstructure:"namespace"`
 	// APIVersion of resource
-	APIVersion string `mapstructure:"apiversion"`
+	APIVersion string `mapstructure:"apiVersion"`
 	// Kind of resource
 	Kind string `mapstructure:"kind"`
 	// Name of resource
@@ -93,24 +98,15 @@ func castToMap(i interface{}) (map[string]interface{}, error) {
 	return retVal, nil
 }
 
-func isNum(i interface{}) bool {
-	switch reflect.ValueOf(i).Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Float32, reflect.Float64:
-		return true
-	default:
-		return false
-	}
-}
-
-func convertToFloat64(i interface{}) (float64, error) {
+func tryConvertToFloat64(i interface{}) (float64, bool) {
 	valueOf := reflect.ValueOf(i)
 	switch valueOf.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return float64(valueOf.Int()), nil
+		return float64(valueOf.Int()), true
 	case reflect.Float32, reflect.Float64:
-		return valueOf.Float(), nil
+		return valueOf.Float(), true
 	default:
-		return 0, fmt.Errorf("Type %s is not a number", valueOf.Kind())
+		return 0, false
 	}
 }
 
@@ -150,23 +146,9 @@ func interfaceChecker(key string, main, sub interface{}) bool {
 		log.Infof("SubKind: %s", subValue.Kind())
 		// Sometimes, one parser will decide a number is an int while the another parser says float
 		// For these cases, we cast both numbers to floats
-		nums := false
-		var num1, num2 float64
-		if isNum(main) && isNum(sub) {
-			var err error
-			nums = true
-			num1, err = convertToFloat64(main)
-			if err != nil {
-				// TODO: handle this situation differently...
-				return false
-			}
-			num2, err = convertToFloat64(sub)
-			if err != nil {
-				// TODO: handle this situation differently...
-				return false
-			}
-		}
-		if nums {
+		num1, bool1 := tryConvertToFloat64(main)
+		num2, bool2 := tryConvertToFloat64(sub)
+		if bool1 && bool2 {
 			match = (num1 == num2)
 		} else {
 			match = reflect.DeepEqual(main, sub)
@@ -318,9 +300,8 @@ func runScorecardFunction(expected, actual map[string]interface{}, function func
 // compareManifests uses the config to verify that a manifest meets requirements specified by config
 func compareManifests(config, manifest map[string]interface{}) (bool, error) {
 	pass := true
-	log.Infof("Running for %+v", config)
 	for key, val := range config {
-		log.Infof("Running for %+v", val)
+		log.Infof("val is : %+v", val)
 		valMap, err := castToMap(val)
 		if err != nil {
 			log.Infof("Failed in valmap: %s", err)
@@ -368,7 +349,11 @@ func userDefinedTests() error {
 	if err != nil {
 		return err
 	}
-	log.Info(fmt.Sprintf("Is Dep Pass? %t", mapIsSubset(depYAMLUnmarshalled, userDefinedTests[0].Expected.Resources[0].Fields)))
+	depPass, err := compareManifests(userDefinedTests[0].Expected.Resources[0].Fields, depYAMLUnmarshalled)
+	log.Info(fmt.Sprintf("Is Dep Pass? %t", depPass))
+	if !depPass || err != nil {
+		return fmt.Errorf("Err: %s", err)
+	}
 	statusYAMLUnmarshalled := make(map[string]interface{})
 	err = yaml.Unmarshal([]byte(statusYAML), &statusYAMLUnmarshalled)
 	if err != nil {
@@ -382,21 +367,39 @@ func userDefinedTests() error {
 	log.Info(fmt.Sprintf("Is Status Pass? %+v", results))
 	log.Info("Suggestions: %+v", scSuggestions)
 	log.Info("Trying to get dep")
-	unstruct := unstructured.Unstructured{}
-	unstruct.SetUnstructuredContent(depYAMLUnmarshalled)
-	log.Infof("Namespace: %s", unstruct.GetNamespace())
-	log.Infof("Name: %s", unstruct.GetName())
 	recvUnstruct := unstructured.Unstructured{}
-	recvUnstruct.SetGroupVersionKind(unstruct.GroupVersionKind())
-	err = runtimeClient.Get(context.TODO(), client.ObjectKey{Namespace: unstruct.GetNamespace(), Name: unstruct.GetName()}, &recvUnstruct)
+	resource1 := userDefinedTests[0].Expected.Resources[0]
+	recvUnstruct.SetGroupVersionKind(schema.FromAPIVersionAndKind(resource1.APIVersion, resource1.Kind))
+	if err := createFromYAMLFile(userDefinedTests[0].CRPath); err != nil {
+		return fmt.Errorf("failed to create cr resource: %v", err)
+	}
+	obj, err := yamlToUnstructured(userDefinedTests[0].CRPath)
+	if err != nil {
+		return fmt.Errorf("failed to decode custom resource manifest into object: %s", err)
+	}
+	err = wait.Poll(time.Second*1, time.Second*30, func() (bool, error) {
+		err = runtimeClient.Get(context.TODO(), client.ObjectKey{Namespace: "default", Name: resource1.Name}, &recvUnstruct)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				log.Info("Not found")
+				return false, nil
+			}
+			return false, err
+		}
+		return compareManifests(userDefinedTests[0].Expected.Resources[0].Fields, recvUnstruct.Object)
+	})
 	if err != nil {
 		return err
 	}
-	log.Info(fmt.Sprintf("Is Dep Pass v2? %t", mapIsSubset(recvUnstruct.Object, userDefinedTests[0].Expected.Resources[0].Fields)))
-	return nil
+	log.Info("Passed!")
+	err = runtimeClient.Delete(context.TODO(), obj)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("STOP")
 }
 
-const depYAML = `apiVersion: extensions/v1beta1
+const depYAML = `apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:

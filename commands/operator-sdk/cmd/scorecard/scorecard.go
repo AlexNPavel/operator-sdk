@@ -177,14 +177,14 @@ func ScorecardTests(cmd *cobra.Command, args []string) error {
 	restMapper = restmapper.NewDeferredDiscoveryRESTMapper(cachedDiscoveryClient)
 	restMapper.Reset()
 	runtimeClient, _ = client.New(kubeconfig, client.Options{Scheme: scheme, Mapper: restMapper})
-	if err = userDefinedTests(); err != nil {
-		return err
-	}
 	if err := createFromYAMLFile(viper.GetString(GlobalManifestOpt)); err != nil {
 		return fmt.Errorf("failed to create global resources: %v", err)
 	}
 	if err := createFromYAMLFile(viper.GetString(NamespacedManifestOpt)); err != nil {
 		return fmt.Errorf("failed to create namespaced resources: %v", err)
+	}
+	if err := userDefinedTests(); err != nil {
+		return err
 	}
 	if err := createFromYAMLFile(viper.GetString(CRManifestOpt)); err != nil {
 		return fmt.Errorf("failed to create cr resource: %v", err)

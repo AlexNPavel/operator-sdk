@@ -2,13 +2,14 @@ cr-manifest: "deploy/crds/cache_v1alpha1_memcached_cr.yaml"
 init-timeout: 60
 csv-path: "deploy/memcachedoperator.0.0.2.csv.yaml"
 #proxy-image: "scorecard-proxy"
-#proxy-pull-policy: "Never"
+proxy-pull-policy: "Never"
 functional_tests:
-  - cr: "deploy/crds/memcached.cr.yaml"
+  - cr: "deploy/crds/cache_v1alpha1_memcached_cr.yaml"
     expected:
       resources:
-        - kind: Deployment
-          name: "example_memcached"
+        - apiVersion: apps/v1
+          kind: Deployment
+          name: "example-memcached"
           fields:
             status:
               readyReplicas: 3
