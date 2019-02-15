@@ -101,20 +101,16 @@ func interfaceChecker(key string, main, sub interface{}) bool {
 	match := true
 	switch subValue.Kind() {
 	case reflect.Slice:
-		log.Info("In slice")
 		switch mainValue.Kind() {
 		case reflect.Slice:
 			match = sliceIsSubset(key, main.([]interface{}), sub.([]interface{}))
 		default:
-			log.Infof("In slice mismatch case for key %s", key)
 			scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due mismatched type for: %s", key))
 			return false
 		}
 	case reflect.Map:
-		log.Info("In map")
 		switch mainValue.Kind() {
 		case reflect.Map:
-			log.Info("In map2")
 			mainMap, err := castToMap(main)
 			if err != nil {
 				return false
@@ -123,16 +119,12 @@ func interfaceChecker(key string, main, sub interface{}) bool {
 			if err != nil {
 				return false
 			}
-			log.Info("Casted")
 			match = mapIsSubset(mainMap, subMap)
 		default:
-			log.Infof("In map mismatch case for key %s", key)
 			scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due mismatched type for: %s", key))
 			return false
 		}
 	default:
-		log.Infof("MainKind: %s", mainValue.Kind())
-		log.Infof("SubKind: %s", subValue.Kind())
 		// Sometimes, one parser will decide a number is an int while the another parser says float
 		// For these cases, we cast both numbers to floats
 		num1, bool1 := tryConvertToFloat64(main)
@@ -147,7 +139,6 @@ func interfaceChecker(key string, main, sub interface{}) bool {
 		}
 	}
 	if !match {
-		log.Infof("In the case for key %s", key)
 		// TODO: change this test to make it able to continue checking other values instead of failing fast
 		scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due nonmatching value for: %s", key))
 	}
@@ -298,10 +289,8 @@ func compareManifests(config, manifest map[string]interface{}) (bool, error) {
 				return false, nil
 			}
 			delete(config, key)
-			log.Infof("Have prefix")
 			switch strings.TrimPrefix(key, "scorecard_function_") {
 			case "length":
-				log.Infof("Running scorecard function length")
 				if !runScorecardFunction(valMap, manifest, scorecareFunctionLength) {
 					pass = false
 				}
@@ -313,7 +302,6 @@ func compareManifests(config, manifest map[string]interface{}) (bool, error) {
 		}
 	}
 	if !mapIsSubset(manifest, config) {
-		log.Info("Map is subset failed")
 		pass = false
 	}
 	return pass, nil
@@ -345,15 +333,11 @@ func userDefinedTests() error {
 		return err
 	}
 	results, err := compareManifests(userDefinedTests[0].Expected.Status, statusYAMLUnmarshalled)
-	log.Infof("Ran compare manifests")
 	if err != nil {
 		return err
 	}
 	log.Info(fmt.Sprintf("Is Status Pass? %+v", results))
-	log.Info("Suggestions: %+v", scSuggestions)
-	log.Info("Trying to get dep")
 	resource1 := userDefinedTests[0].Expected.Resources[0]
-	log.Infof("%+v", resource1)
 	// change the metadata fields to map[string]interface{} instead of map[interface{}]interface{} so the libraries work
 	metadataTmp := resource1["metadata"]
 	delete(resource1, "metadata")
@@ -363,8 +347,6 @@ func userDefinedTests() error {
 	}
 	resource1["metadata"] = metadata
 	tempUnstruct := unstructured.Unstructured{Object: resource1}
-	log.Infof("Name: %s", tempUnstruct.GetName())
-	log.Infof("GVK: %s", tempUnstruct.GroupVersionKind())
 	if err := createFromYAMLFile(userDefinedTests[0].CRPath); err != nil {
 		return fmt.Errorf("failed to create cr resource: %v", err)
 	}
@@ -376,10 +358,8 @@ func userDefinedTests() error {
 		err = runtimeClient.Get(context.TODO(), client.ObjectKey{Namespace: "default", Name: tempUnstruct.GetName()}, &tempUnstruct)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				log.Info("Not found")
 				return false, nil
 			}
-			log.Errorf("wait error")
 			return false, err
 		}
 		return compareManifests(userDefinedTests[0].Expected.Resources[0], tempUnstruct.Object)
