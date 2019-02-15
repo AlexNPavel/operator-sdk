@@ -9,15 +9,15 @@ functional_tests:
       resources:
         - apiVersion: apps/v1
           kind: Deployment
-          name: "example-memcached"
-          fields:
-            status:
-              readyReplicas: 3
-            spec:
-              template:
-                spec:
-                  containers:
-                    - image: memcached:1.4.36-alpine
+          metadata:
+            name: example-memcached
+          status:
+            readyReplicas: 3
+          spec:
+            template:
+              spec:
+                containers:
+                  - image: memcached:1.4.36-alpine
       status:
         scorecard_function_length:
           nodes: 3
@@ -28,9 +28,8 @@ functional_tests:
           resources:
             - kind: Deployment
               name: "example_memcached"
-              fields:
-                status:
-                  readyReplicas: 4
+              status:
+                readyReplicas: 4
           status:
             scorecard_function_length:
               nodes: 4

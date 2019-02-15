@@ -23,7 +23,6 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/ghodss/yaml"
@@ -46,23 +45,9 @@ type UserDefinedTest struct {
 
 type Expected struct {
 	// Resources expected to be created after the operator reacts to the CR
-	Resources []ExpectedResource `mapstructure:"resources"`
+	Resources []map[string]interface{} `mapstructure:"resources"`
 	// Expected values in CR's status after the operator reacts to the CR
 	Status map[string]interface{} `mapstructure:"status"`
-}
-
-// Struct containing a resource and its expected fields
-type ExpectedResource struct {
-	// (if set) Namespace of resource
-	Namespace string `mapstructure:"namespace"`
-	// APIVersion of resource
-	APIVersion string `mapstructure:"apiVersion"`
-	// Kind of resource
-	Kind string `mapstructure:"kind"`
-	// Name of resource
-	Name string `mapstructure:"name"`
-	// The fields we expect to see in this resource
-	Fields map[string]interface{} `mapstructure:"fields"`
 }
 
 // Modifications specifies a spec field to change in the CR with the expected results
@@ -116,6 +101,7 @@ func interfaceChecker(key string, main, sub interface{}) bool {
 	match := true
 	switch subValue.Kind() {
 	case reflect.Slice:
+		log.Info("In slice")
 		switch mainValue.Kind() {
 		case reflect.Slice:
 			match = sliceIsSubset(key, main.([]interface{}), sub.([]interface{}))
@@ -125,8 +111,10 @@ func interfaceChecker(key string, main, sub interface{}) bool {
 			return false
 		}
 	case reflect.Map:
+		log.Info("In map")
 		switch mainValue.Kind() {
 		case reflect.Map:
+			log.Info("In map2")
 			mainMap, err := castToMap(main)
 			if err != nil {
 				return false
@@ -135,6 +123,7 @@ func interfaceChecker(key string, main, sub interface{}) bool {
 			if err != nil {
 				return false
 			}
+			log.Info("Casted")
 			match = mapIsSubset(mainMap, subMap)
 		default:
 			log.Infof("In map mismatch case for key %s", key)
@@ -300,14 +289,15 @@ func runScorecardFunction(expected, actual map[string]interface{}, function func
 // compareManifests uses the config to verify that a manifest meets requirements specified by config
 func compareManifests(config, manifest map[string]interface{}) (bool, error) {
 	pass := true
+	// separate scorecard_function_ fields from rest of object
 	for key, val := range config {
-		log.Infof("val is : %+v", val)
-		valMap, err := castToMap(val)
-		if err != nil {
-			log.Infof("Failed in valmap: %s", err)
-			return false, nil
-		}
 		if strings.HasPrefix(key, "scorecard_function_") {
+			valMap, err := castToMap(val)
+			if err != nil {
+				log.Infof("Failed in valmap: %s", err)
+				return false, nil
+			}
+			delete(config, key)
 			log.Infof("Have prefix")
 			switch strings.TrimPrefix(key, "scorecard_function_") {
 			case "length":
@@ -321,15 +311,10 @@ func compareManifests(config, manifest map[string]interface{}) (bool, error) {
 			}
 			continue
 		}
-		log.Infof("Running for %+v", manifest[key])
-		manKeyMap, err := castToMap(manifest[key])
-		if err != nil {
-			log.Infof("Failed in manmap: %s", err)
-			return false, nil
-		}
-		if !mapIsSubset(manKeyMap, valMap) {
-			pass = false
-		}
+	}
+	if !mapIsSubset(manifest, config) {
+		log.Info("Map is subset failed")
+		pass = false
 	}
 	return pass, nil
 }
@@ -349,7 +334,7 @@ func userDefinedTests() error {
 	if err != nil {
 		return err
 	}
-	depPass, err := compareManifests(userDefinedTests[0].Expected.Resources[0].Fields, depYAMLUnmarshalled)
+	depPass, err := compareManifests(userDefinedTests[0].Expected.Resources[0], depYAMLUnmarshalled)
 	log.Info(fmt.Sprintf("Is Dep Pass? %t", depPass))
 	if !depPass || err != nil {
 		return fmt.Errorf("Err: %s", err)
@@ -367,9 +352,19 @@ func userDefinedTests() error {
 	log.Info(fmt.Sprintf("Is Status Pass? %+v", results))
 	log.Info("Suggestions: %+v", scSuggestions)
 	log.Info("Trying to get dep")
-	recvUnstruct := unstructured.Unstructured{}
 	resource1 := userDefinedTests[0].Expected.Resources[0]
-	recvUnstruct.SetGroupVersionKind(schema.FromAPIVersionAndKind(resource1.APIVersion, resource1.Kind))
+	log.Infof("%+v", resource1)
+	// change the metadata fields to map[string]interface{} instead of map[interface{}]interface{} so the libraries work
+	metadataTmp := resource1["metadata"]
+	delete(resource1, "metadata")
+	metadata, err := castToMap(metadataTmp)
+	if err != nil {
+		return err
+	}
+	resource1["metadata"] = metadata
+	tempUnstruct := unstructured.Unstructured{Object: resource1}
+	log.Infof("Name: %s", tempUnstruct.GetName())
+	log.Infof("GVK: %s", tempUnstruct.GroupVersionKind())
 	if err := createFromYAMLFile(userDefinedTests[0].CRPath); err != nil {
 		return fmt.Errorf("failed to create cr resource: %v", err)
 	}
@@ -378,15 +373,16 @@ func userDefinedTests() error {
 		return fmt.Errorf("failed to decode custom resource manifest into object: %s", err)
 	}
 	err = wait.Poll(time.Second*1, time.Second*30, func() (bool, error) {
-		err = runtimeClient.Get(context.TODO(), client.ObjectKey{Namespace: "default", Name: resource1.Name}, &recvUnstruct)
+		err = runtimeClient.Get(context.TODO(), client.ObjectKey{Namespace: "default", Name: tempUnstruct.GetName()}, &tempUnstruct)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				log.Info("Not found")
 				return false, nil
 			}
+			log.Errorf("wait error")
 			return false, err
 		}
-		return compareManifests(userDefinedTests[0].Expected.Resources[0].Fields, recvUnstruct.Object)
+		return compareManifests(userDefinedTests[0].Expected.Resources[0], tempUnstruct.Object)
 	})
 	if err != nil {
 		return err
