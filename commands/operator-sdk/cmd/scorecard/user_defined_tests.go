@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/ghodss/yaml"
+	goyaml "gopkg.in/yaml.v2"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -38,7 +39,7 @@ type UserDefinedTest struct {
 	// Path to cr to be used for testing
 	CRPath string `mapstructure:"cr"`
 	// Expected resources and status
-	Expected Expected `mapstructure:"expected"`
+	Expected *Expected `mapstructure:"expected"`
 	// Sub-tests modifying a few fields with expected changes
 	Modifications []Modification `mapstructure:"modifications"`
 }
@@ -55,32 +56,81 @@ type Modification struct {
 	// a map of the spec fields to modify
 	Spec map[string]interface{} `mapstructure:"spec"`
 	// Expected resources and status
-	Expected Expected `mapstructure:"expected"`
+	Expected *Expected `mapstructure:"expected"`
 }
 
-// castToMap takes an interface and attempts to convert it to
-// a map[string]interface{}. This is necessary because maps
-// under the top level of a YAML map are map[interface{}]interface{}
-// and this will not be fixed until at least go-yaml v3.
+func fixExpected(exp *Expected) (*Expected, error) {
+	fixedResources := make([]map[string]interface{}, 0, 0)
+	for _, item := range exp.Resources {
+		marshaled, err := goyaml.Marshal(item)
+		if err != nil {
+			return nil, err
+		}
+		strMap := make(map[string]interface{})
+		err = yaml.Unmarshal(marshaled, &strMap)
+		if err != nil {
+			return nil, err
+		}
+		fixedResources = append(fixedResources, strMap)
+	}
+	marshaledStat, err := goyaml.Marshal(exp.Status)
+	if err != nil {
+		return nil, err
+	}
+	fixedStat := make(map[string]interface{})
+	err = yaml.Unmarshal(marshaledStat, &fixedStat)
+	if err != nil {
+		return nil, err
+	}
+	return &Expected{Resources: fixedResources, Status: fixedStat}, nil
+}
+
+func fixModifications(modifications []Modification) ([]Modification, error) {
+	var fixedModifications []Modification
+	for _, mod := range modifications {
+		fixedMod := Modification{}
+		marshaledSpec, err := goyaml.Marshal(mod.Spec)
+		if err != nil {
+			return nil, err
+		}
+		fixedSpec := make(map[string]interface{})
+		err = yaml.Unmarshal(marshaledSpec, &fixedSpec)
+		if err != nil {
+			return nil, err
+		}
+		fixedMod.Spec = fixedSpec
+		fixedExpected, err := fixExpected(mod.Expected)
+		if err != nil {
+			return nil, err
+		}
+		fixedMod.Expected = fixedExpected
+		fixedModifications = append(fixedModifications, fixedMod)
+	}
+	return fixedModifications, nil
+}
+
+// fixMaps converts YAML style maps (whose keys can be interfaces) to
+// JSON style maps (whose keys can only be strings). This fixes many
+// compatibility issues for us when working with kubernetes. This
+// may be possible directly with go-yaml in the future:
 // https://github.com/go-yaml/yaml/pull/385
-func castToMap(i interface{}) (map[string]interface{}, error) {
-	retVal := make(map[string]interface{})
-	origMap, ok := i.(map[interface{}]interface{})
-	if !ok {
-		origMap, ok := i.(map[string]interface{})
-		if ok {
-			return origMap, nil
+func fixMaps(tests []UserDefinedTest) ([]UserDefinedTest, error) {
+	var fixedTests []UserDefinedTest
+	for _, test := range tests {
+		fixedTest := UserDefinedTest{CRPath: test.CRPath}
+		fixedExpected, err := fixExpected(test.Expected)
+		if err != nil {
+			return nil, err
 		}
-		return nil, errors.New("Interface is not a map[interface{}]interface{}")
-	}
-	for key, val := range origMap {
-		stringKey, ok := key.(string)
-		if !ok {
-			return nil, errors.New("Map key is not string")
+		fixedTest.Expected = fixedExpected
+		fixedModifications, err := fixModifications(test.Modifications)
+		if err != nil {
+			return nil, err
 		}
-		retVal[stringKey] = val
+		fixedTest.Modifications = fixedModifications
+		fixedTests = append(fixedTests, fixedTest)
 	}
-	return retVal, nil
+	return fixedTests, nil
 }
 
 func tryConvertToFloat64(i interface{}) (float64, bool) {
@@ -111,15 +161,7 @@ func interfaceChecker(key string, main, sub interface{}) bool {
 	case reflect.Map:
 		switch mainValue.Kind() {
 		case reflect.Map:
-			mainMap, err := castToMap(main)
-			if err != nil {
-				return false
-			}
-			subMap, err := castToMap(sub)
-			if err != nil {
-				return false
-			}
-			match = mapIsSubset(mainMap, subMap)
+			match = mapIsSubset(main.(map[string]interface{}), sub.(map[string]interface{}))
 		default:
 			scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due mismatched type for: %s", key))
 			return false
@@ -176,15 +218,20 @@ func mapIsSubset(bigMap, subMap map[string]interface{}) bool {
 }
 
 func scorecareFunctionLength(expected, actual interface{}) bool {
-	expectedSliceLength, ok := expected.(int)
+	// all ints from ghodss unmarshaled YAML are int64 or float64
+	expectedSliceLength, ok := expected.(float64)
 	if !ok {
-		return false
+		expectedSliceLengthInt, ok := expected.(int64)
+		if !ok {
+			return false
+		}
+		expectedSliceLength = float64(expectedSliceLengthInt)
 	}
 	actualSlice, ok := actual.([]interface{})
 	if !ok {
 		return false
 	}
-	return expectedSliceLength == len(actualSlice)
+	return expectedSliceLength == float64(len(actualSlice))
 }
 
 func getMatchingLeavesMap(config, manifest map[string]interface{}) ([]map[string]interface{}, error) {
@@ -239,15 +286,7 @@ func getMatchingLeavesArray(config, manifest []interface{}) ([]map[string]interf
 // }
 func getMatchingLeaves(config, manifest interface{}) ([]map[string]interface{}, error) {
 	if reflect.ValueOf(config).Kind() == reflect.Map {
-		configMap, err := castToMap(config)
-		if err != nil {
-			return nil, err
-		}
-		manMap, err := castToMap(manifest)
-		if err != nil {
-			return nil, err
-		}
-		return getMatchingLeavesMap(configMap, manMap)
+		return getMatchingLeavesMap(config.(map[string]interface{}), manifest.(map[string]interface{}))
 	}
 	if reflect.ValueOf(config).Kind() == reflect.Slice {
 		configSlice, ok := config.([]interface{})
@@ -283,15 +322,10 @@ func compareManifests(config, manifest map[string]interface{}) (bool, error) {
 	// separate scorecard_function_ fields from rest of object
 	for key, val := range config {
 		if strings.HasPrefix(key, "scorecard_function_") {
-			valMap, err := castToMap(val)
-			if err != nil {
-				log.Infof("Failed in valmap: %s", err)
-				return false, nil
-			}
 			delete(config, key)
 			switch strings.TrimPrefix(key, "scorecard_function_") {
 			case "length":
-				if !runScorecardFunction(valMap, manifest, scorecareFunctionLength) {
+				if !runScorecardFunction(val.(map[string]interface{}), manifest, scorecareFunctionLength) {
 					pass = false
 				}
 			default:
@@ -313,6 +347,10 @@ func userDefinedTests() error {
 		return errors.New("functional_tests config not set")
 	}
 	err := viper.UnmarshalKey("functional_tests", &userDefinedTests)
+	if err != nil {
+		return err
+	}
+	userDefinedTests, err = fixMaps(userDefinedTests)
 	if err != nil {
 		return err
 	}
@@ -339,12 +377,8 @@ func userDefinedTests() error {
 	log.Info(fmt.Sprintf("Is Status Pass? %+v", results))
 	resource1 := userDefinedTests[0].Expected.Resources[0]
 	// change the metadata fields to map[string]interface{} instead of map[interface{}]interface{} so the libraries work
-	metadataTmp := resource1["metadata"]
+	metadata := resource1["metadata"]
 	delete(resource1, "metadata")
-	metadata, err := castToMap(metadataTmp)
-	if err != nil {
-		return err
-	}
 	resource1["metadata"] = metadata
 	tempUnstruct := unstructured.Unstructured{Object: resource1}
 	if err := createFromYAMLFile(userDefinedTests[0].CRPath); err != nil {
