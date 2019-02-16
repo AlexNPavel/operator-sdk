@@ -376,10 +376,6 @@ func userDefinedTests() error {
 	}
 	log.Info(fmt.Sprintf("Is Status Pass? %+v", results))
 	resource1 := userDefinedTests[0].Expected.Resources[0]
-	// change the metadata fields to map[string]interface{} instead of map[interface{}]interface{} so the libraries work
-	metadata := resource1["metadata"]
-	delete(resource1, "metadata")
-	resource1["metadata"] = metadata
 	tempUnstruct := unstructured.Unstructured{Object: resource1}
 	if err := createFromYAMLFile(userDefinedTests[0].CRPath); err != nil {
 		return fmt.Errorf("failed to create cr resource: %v", err)
