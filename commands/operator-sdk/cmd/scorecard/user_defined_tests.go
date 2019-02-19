@@ -405,27 +405,6 @@ func userDefinedTests() error {
 	if err != nil {
 		return err
 	}
-	// use userdefinedTests as sub and make a custom map to test against
-	depYAMLUnmarshalled := make(map[string]interface{})
-	err = yaml.Unmarshal([]byte(depYAML), &depYAMLUnmarshalled)
-	if err != nil {
-		return err
-	}
-	depPass, err := compareManifests(userDefinedTests[0].Expected.Resources[0], depYAMLUnmarshalled)
-	log.Info(fmt.Sprintf("Is Dep Pass? %t", depPass))
-	if !depPass || err != nil {
-		return fmt.Errorf("Err: %s", err)
-	}
-	statusYAMLUnmarshalled := make(map[string]interface{})
-	err = yaml.Unmarshal([]byte(statusYAML), &statusYAMLUnmarshalled)
-	if err != nil {
-		return err
-	}
-	results, err := compareManifests(userDefinedTests[0].Expected.Status, statusYAMLUnmarshalled)
-	if err != nil {
-		return err
-	}
-	log.Info(fmt.Sprintf("Is Status Pass? %+v", results))
 	resource1 := userDefinedTests[0].Expected.Resources[0]
 	tempUnstruct := unstructured.Unstructured{Object: resource1}
 	if err := createFromYAMLFile(userDefinedTests[0].CRPath); err != nil {
@@ -448,7 +427,6 @@ func userDefinedTests() error {
 	if err != nil {
 		return err
 	}
-	log.Info("Passed!")
 	log.Infof("Orig: %+v", obj.Object["spec"])
 	tempUnstruct.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), userDefinedTests[0].Modifications[0].Spec)
 	if err != nil {
@@ -466,91 +444,3 @@ func userDefinedTests() error {
 	}
 	return fmt.Errorf("STOP")
 }
-
-const depYAML = `apiVersion: apps/v1
-kind: Deployment
-metadata:
-  annotations:
-    deployment.kubernetes.io/revision: "1"
-  creationTimestamp: 2019-02-04T22:21:21Z
-  generation: 1
-  name: example-memcached
-  namespace: default
-  ownerReferences:
-  - apiVersion: cache.example.com/v1alpha1
-    blockOwnerDeletion: true
-    controller: true
-    kind: Memcached
-    name: example-memcached
-    uid: 33039fc7-28cb-11e9-9ade-3438e02bae33
-  resourceVersion: "35888"
-  selfLink: /apis/extensions/v1beta1/namespaces/default/deployments/example-memcached
-  uid: 33080a9d-28cb-11e9-9ade-3438e02bae33
-spec:
-  progressDeadlineSeconds: 600
-  replicas: 3
-  revisionHistoryLimit: 10
-  selector:
-    matchLabels:
-      app: memcached
-      memcached_cr: example-memcached
-  strategy:
-    rollingUpdate:
-      maxSurge: 25%
-      maxUnavailable: 25%
-    type: RollingUpdate
-  template:
-    metadata:
-      creationTimestamp: null
-      labels:
-        app: memcached
-        memcached_cr: example-memcached
-    spec:
-      containers:
-      - command:
-        - memcached
-        - -m=64
-        - -o
-        - modern
-        - -v
-        image: memcached:1.4.36-alpine
-        imagePullPolicy: IfNotPresent
-        name: memcached
-        ports:
-        - containerPort: 11211
-          name: memcached
-          protocol: TCP
-        resources: {}
-        terminationMessagePath: /dev/termination-log
-        terminationMessagePolicy: File
-      dnsPolicy: ClusterFirst
-      restartPolicy: Always
-      schedulerName: default-scheduler
-      securityContext: {}
-      terminationGracePeriodSeconds: 30
-status:
-  availableReplicas: 3
-  conditions:
-  - lastTransitionTime: 2019-02-04T22:21:24Z
-    lastUpdateTime: 2019-02-04T22:21:24Z
-    message: Deployment has minimum availability.
-    reason: MinimumReplicasAvailable
-    status: "True"
-    type: Available
-  - lastTransitionTime: 2019-02-04T22:21:21Z
-    lastUpdateTime: 2019-02-04T22:21:24Z
-    message: ReplicaSet "example-memcached-55dc4795d6" has successfully progressed.
-    reason: NewReplicaSetAvailable
-    status: "True"
-    type: Progressing
-  observedGeneration: 1
-  readyReplicas: 3
-  replicas: 3
-  updatedReplicas: 3
-`
-
-const statusYAML = `nodes:
-  - example-memcached-55dc4795d6-ggl5q
-  - example-memcached-55dc4795d6-jxbvr
-  - example-memcached-55dc4795d6-xxz55
-`
