@@ -341,6 +341,57 @@ func compareManifests(config, manifest map[string]interface{}) (bool, error) {
 	return pass, nil
 }
 
+func updateArray(sourceArr, changes []interface{}) ([]interface{}, error) {
+	var err error
+	for index, val := range changes {
+		sourceArr[index], err = updateVal(sourceArr[index], val)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return sourceArr, nil
+}
+
+func updateMap(sourceMap, changes map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	for key, val := range changes {
+		sourceMap[key], err = updateVal(sourceMap[key], val)
+		if err != nil {
+			return nil, fmt.Errorf("error processing key: %s: (%v)", key, err)
+		}
+	}
+	return sourceMap, nil
+}
+
+func updateVal(source, change interface{}) (interface{}, error) {
+	changeVal := reflect.ValueOf(change)
+	sourceVal := reflect.ValueOf(source)
+	if source == nil {
+		return change, nil
+	}
+	if changeVal.Kind() == reflect.Map {
+		if sourceVal.Kind() != reflect.Map {
+			return nil, fmt.Errorf("unmatching types in modifications; type %v != %v", sourceVal.Kind(), changeVal.Kind())
+		}
+		result, err := updateMap(source.(map[string]interface{}), change.(map[string]interface{}))
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+	if changeVal.Kind() == reflect.Slice {
+		if sourceVal.Kind() != reflect.Slice {
+			return nil, fmt.Errorf("unmatching types in modifications; type %v != %v", sourceVal.Kind(), changeVal.Kind())
+		}
+		result, err := updateArray(source.([]interface{}), change.([]interface{}))
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+	return change, nil
+}
+
 func userDefinedTests() error {
 	userDefinedTests := []UserDefinedTest{}
 	if !viper.IsSet("functional_tests") {
@@ -398,6 +449,17 @@ func userDefinedTests() error {
 		return err
 	}
 	log.Info("Passed!")
+	log.Infof("Orig: %+v", obj.Object["spec"])
+	tempUnstruct.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), userDefinedTests[0].Modifications[0].Spec)
+	if err != nil {
+		return err
+	}
+	log.Infof("Updated: %+v", obj.Object["spec"])
+	tempUnstruct.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), userDefinedTests[0].Modifications[1].Spec)
+	if err != nil {
+		return err
+	}
+	log.Infof("Updated2: %+v", obj.Object["spec"])
 	err = runtimeClient.Delete(context.TODO(), obj)
 	if err != nil {
 		return err
