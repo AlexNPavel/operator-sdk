@@ -405,42 +405,43 @@ func userDefinedTests() error {
 	if err != nil {
 		return err
 	}
-	resource1 := userDefinedTests[0].Expected.Resources[0]
-	tempUnstruct := unstructured.Unstructured{Object: resource1}
-	if err := createFromYAMLFile(userDefinedTests[0].CRPath); err != nil {
-		return fmt.Errorf("failed to create cr resource: %v", err)
-	}
-	obj, err := yamlToUnstructured(userDefinedTests[0].CRPath)
-	if err != nil {
-		return fmt.Errorf("failed to decode custom resource manifest into object: %s", err)
-	}
-	err = wait.Poll(time.Second*1, time.Second*30, func() (bool, error) {
-		err = runtimeClient.Get(context.TODO(), client.ObjectKey{Namespace: "default", Name: tempUnstruct.GetName()}, &tempUnstruct)
+	for _, test := range userDefinedTests {
+		obj, err := yamlToUnstructured(test.CRPath)
 		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return false, nil
-			}
-			return false, err
+			return fmt.Errorf("failed to decode custom resource manifest into object: %s", err)
 		}
-		return compareManifests(userDefinedTests[0].Expected.Resources[0], tempUnstruct.Object)
-	})
-	if err != nil {
-		return err
-	}
-	log.Infof("Orig: %+v", obj.Object["spec"])
-	tempUnstruct.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), userDefinedTests[0].Modifications[0].Spec)
-	if err != nil {
-		return err
-	}
-	log.Infof("Updated: %+v", obj.Object["spec"])
-	tempUnstruct.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), userDefinedTests[0].Modifications[1].Spec)
-	if err != nil {
-		return err
-	}
-	log.Infof("Updated2: %+v", obj.Object["spec"])
-	err = runtimeClient.Delete(context.TODO(), obj)
-	if err != nil {
-		return err
+		if err := createFromYAMLFile(test.CRPath); err != nil {
+			return fmt.Errorf("failed to create cr resource: %v", err)
+		}
+		tempUnstruct := unstructured.Unstructured{Object: test.Expected.Resources[0]}
+		err = wait.Poll(time.Second*1, time.Second*30, func() (bool, error) {
+			err = runtimeClient.Get(context.TODO(), client.ObjectKey{Namespace: "default", Name: tempUnstruct.GetName()}, &tempUnstruct)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					return false, nil
+				}
+				return false, err
+			}
+			return compareManifests(test.Expected.Resources[0], tempUnstruct.Object)
+		})
+		if err != nil {
+			return err
+		}
+		log.Infof("Orig: %+v", obj.Object["spec"])
+		tempUnstruct.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), test.Modifications[0].Spec)
+		if err != nil {
+			return err
+		}
+		log.Infof("Updated: %+v", obj.Object["spec"])
+		tempUnstruct.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), test.Modifications[1].Spec)
+		if err != nil {
+			return err
+		}
+		log.Infof("Updated2: %+v", obj.Object["spec"])
+		err = runtimeClient.Delete(context.TODO(), obj)
+		if err != nil {
+			return err
+		}
 	}
 	return fmt.Errorf("STOP")
 }
