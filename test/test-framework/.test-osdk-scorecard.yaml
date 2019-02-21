@@ -24,37 +24,27 @@ functional_tests:
     modifications:
       - spec:
           size: 4
-          bleh:
-            hello: world
-          meArray:
-            - test1: yo
-            - test1: yo2
-            - newmap:
-                hello: world2
         expected:
           resources:
-            - kind: Deployment
-              name: "example_memcached"
+            - apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: example-memcached
               status:
                 readyReplicas: 4
           status:
             scorecard_function_length:
               nodes: 4
       - spec:
-          size: 4
-          bleh:
-            hello: new-world
-          meArray:
-            - test2: yo4
-            - test1: yo3
-            - newmap:
-                hello: world3
+          size: 2
         expected:
           resources:
-            - kind: Deployment
-              name: "example_memcached"
+            - apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: example-memcached
               status:
-                readyReplicas: 4
+                readyReplicas: 2
           status:
             scorecard_function_length:
-              nodes: 4
+              nodes: 2

@@ -392,6 +392,42 @@ func updateVal(source, change interface{}) (interface{}, error) {
 	return change, nil
 }
 
+func checkResources(resources []map[string]interface{}) (bool, error) {
+	for _, res := range resources {
+		tempUnstruct := unstructured.Unstructured{Object: res}
+		err := wait.Poll(time.Second*1, time.Second*30, func() (bool, error) {
+			err := runtimeClient.Get(context.TODO(), client.ObjectKey{Namespace: "default", Name: tempUnstruct.GetName()}, &tempUnstruct)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					return false, nil
+				}
+				return false, err
+			}
+			return compareManifests(res, tempUnstruct.Object)
+		})
+		if err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func checkStatus(status map[string]interface{}, obj *unstructured.Unstructured) (bool, error) {
+	objKey, err := client.ObjectKeyFromObject(obj)
+	if err != nil {
+		return false, err
+	}
+	err = runtimeClient.Get(context.TODO(), objKey, obj)
+	if err != nil {
+		return false, err
+	}
+	objStatus, ok := obj.Object["status"].(map[string]interface{})
+	if !ok {
+		return false, nil
+	}
+	return compareManifests(status, objStatus)
+}
+
 func userDefinedTests() error {
 	userDefinedTests := []UserDefinedTest{}
 	if !viper.IsSet("functional_tests") {
@@ -413,31 +449,59 @@ func userDefinedTests() error {
 		if err := createFromYAMLFile(test.CRPath); err != nil {
 			return fmt.Errorf("failed to create cr resource: %v", err)
 		}
-		tempUnstruct := unstructured.Unstructured{Object: test.Expected.Resources[0]}
-		err = wait.Poll(time.Second*1, time.Second*30, func() (bool, error) {
-			err = runtimeClient.Get(context.TODO(), client.ObjectKey{Namespace: "default", Name: tempUnstruct.GetName()}, &tempUnstruct)
+		resPass, err := checkResources(test.Expected.Resources)
+		if !resPass {
+			log.Info("ResPass failed")
+		} else {
+			log.Info("ResPass succeeded")
+		}
+		if err != nil {
+			return err
+		}
+		statPass, err := checkStatus(test.Expected.Status, obj)
+		if !statPass {
+			log.Info("StatPass failed")
+		} else {
+			log.Info("StatPass succeeded")
+		}
+		if err != nil {
+			return err
+		}
+		for index, mod := range test.Modifications {
+			objKey, err := client.ObjectKeyFromObject(obj)
 			if err != nil {
-				if apierrors.IsNotFound(err) {
-					return false, nil
-				}
-				return false, err
+				return err
 			}
-			return compareManifests(test.Expected.Resources[0], tempUnstruct.Object)
-		})
-		if err != nil {
-			return err
+			err = runtimeClient.Get(context.TODO(), objKey, obj)
+			log.Infof("Orig: %+v", obj.Object["spec"])
+			obj.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), mod.Spec)
+			if err != nil {
+				return err
+			}
+			err = runtimeClient.Update(context.TODO(), obj)
+			if err != nil {
+				return err
+			}
+			log.Infof("Updated: %+v", obj.Object["spec"])
+			resPass, err := checkResources(mod.Expected.Resources)
+			if !resPass {
+				log.Infof("ResPass%d failed", index)
+			} else {
+				log.Infof("ResPass%d succeeded", index)
+			}
+			if err != nil {
+				return err
+			}
+			statPass, err := checkStatus(test.Expected.Status, obj)
+			if !statPass {
+				log.Infof("StatPass%d failed", index)
+			} else {
+				log.Infof("StatPass%d succeeded", index)
+			}
+			if err != nil {
+				return err
+			}
 		}
-		log.Infof("Orig: %+v", obj.Object["spec"])
-		tempUnstruct.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), test.Modifications[0].Spec)
-		if err != nil {
-			return err
-		}
-		log.Infof("Updated: %+v", obj.Object["spec"])
-		tempUnstruct.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), test.Modifications[1].Spec)
-		if err != nil {
-			return err
-		}
-		log.Infof("Updated2: %+v", obj.Object["spec"])
 		err = runtimeClient.Delete(context.TODO(), obj)
 		if err != nil {
 			return err
