@@ -178,12 +178,13 @@ func interfaceChecker(key string, main, sub interface{}) bool {
 			match = reflect.DeepEqual(main, sub)
 		}
 		if !match {
-			log.Infof("%+v != %+v", main, sub)
+			log.Debugf("%+v != %+v", main, sub)
 		}
 	}
 	if !match {
 		// TODO: change this test to make it able to continue checking other values instead of failing fast
-		scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due nonmatching value for: %s", key))
+		// Disabled since we poll and might trigger this... Will re-enable somehow later
+		//scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due nonmatching value for: %s", key))
 	}
 	return match
 }
@@ -195,7 +196,8 @@ func sliceIsSubset(key string, bigSlice, subSlice []interface{}) bool {
 	for index, value := range subSlice {
 		if !interfaceChecker(key, bigSlice[index], value) {
 			// TODO: change this test to make it able to continue checking other values instead of failing fast
-			scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due nonmatching value for: %s", key))
+			// Disabled since we poll and might trigger this... Will re-enable somehow later
+			//scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due nonmatching value for: %s", key))
 			return false
 		}
 	}
@@ -206,12 +208,14 @@ func mapIsSubset(bigMap, subMap map[string]interface{}) bool {
 	for key, value := range subMap {
 		if _, ok := bigMap[key]; !ok {
 			// TODO: make a better way to report what went wrong in functional tests
-			scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due to missing field in resource: %s", key))
+			// Disabled since we poll and might trigger this... Will re-enable somehow later
+			//scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due to missing field in resource: %s", key))
 			return false
 		}
 		if !interfaceChecker(key, bigMap[key], value) {
 			// TODO: change this test to make it able to continue checking other values instead of failing fast
-			scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due nonmatching value for: %s", key))
+			// Disabled since we poll and might trigger this... Will re-enable somehow later
+			//scSuggestions = append(scSuggestions, fmt.Sprintf("Functional tests failed due nonmatching value for: %s", key))
 			return false
 		}
 	}
@@ -474,7 +478,6 @@ func userDefinedTests() error {
 				return err
 			}
 			err = runtimeClient.Get(context.TODO(), objKey, obj)
-			log.Infof("Orig: %+v", obj.Object["spec"])
 			obj.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), mod.Spec)
 			if err != nil {
 				return err
@@ -483,7 +486,6 @@ func userDefinedTests() error {
 			if err != nil {
 				return err
 			}
-			log.Infof("Updated: %+v", obj.Object["spec"])
 			resPass, err := checkResources(mod.Expected.Resources)
 			if !resPass {
 				log.Infof("ResPass%d failed", index)
@@ -508,5 +510,5 @@ func userDefinedTests() error {
 			return err
 		}
 	}
-	return fmt.Errorf("STOP")
+	return nil
 }
