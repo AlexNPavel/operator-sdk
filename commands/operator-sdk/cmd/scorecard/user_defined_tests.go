@@ -34,7 +34,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Struct containing a user defined test. User passes tests as an array using the `functional_tests` viper config
+// UserDefinedTest contains a user defined test. User passes tests as an array using the `functional_tests` viper config
 type UserDefinedTest struct {
 	// Path to cr to be used for testing
 	CRPath string `mapstructure:"cr"`
@@ -44,6 +44,7 @@ type UserDefinedTest struct {
 	Modifications []Modification `mapstructure:"modifications"`
 }
 
+// Expected holds expected resources and status of the CR
 type Expected struct {
 	// Resources expected to be created after the operator reacts to the CR
 	Resources []map[string]interface{} `mapstructure:"resources"`
@@ -51,7 +52,7 @@ type Expected struct {
 	Status map[string]interface{} `mapstructure:"status"`
 }
 
-// Modifications specifies a spec field to change in the CR with the expected results
+// Modification specifies a spec field to change in the CR with the expected results
 type Modification struct {
 	// a map of the spec fields to modify
 	Spec map[string]interface{} `mapstructure:"spec"`
