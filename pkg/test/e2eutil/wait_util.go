@@ -15,11 +15,14 @@
 package e2eutil
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/operator-framework/operator-sdk/pkg/test"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -65,5 +68,30 @@ func waitForDeployment(t *testing.T, kubeclient kubernetes.Interface, namespace,
 		return err
 	}
 	t.Logf("Deployment available (%d/%d)\n", replicas, replicas)
+	return nil
+}
+
+func waitForPod(t *testing.T, runtimeClient test.FrameworkClient, namespace, name string, retryInterval, timeout time.Duration) error {
+	pod := &corev1.Pod{}
+	err := wait.Poll(retryInterval, timeout, func() (done bool, err error) {
+		err = runtimeClient.Get(context.TODO(), client.ObjectKey{Name: name, Namespace: namespace}, pod)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				t.Logf("Waiting for availability of %s pod\n", name)
+				return false, nil
+			}
+			return false, err
+		}
+
+		if pod.Status.Phase == corev1.PodRunning {
+			return true, nil
+		}
+		t.Logf("Waiting for full availability of %s pod\n", name)
+		return false, nil
+	})
+	if err != nil {
+		return err
+	}
+	t.Logf("%s Pod available\n", name)
 	return nil
 }

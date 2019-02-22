@@ -183,9 +183,6 @@ func ScorecardTests(cmd *cobra.Command, args []string) error {
 	if err := createFromYAMLFile(viper.GetString(NamespacedManifestOpt)); err != nil {
 		return fmt.Errorf("failed to create namespaced resources: %v", err)
 	}
-	if err := userDefinedTests(); err != nil {
-		return err
-	}
 	if err := createFromYAMLFile(viper.GetString(CRManifestOpt)); err != nil {
 		return fmt.Errorf("failed to create cr resource: %v", err)
 	}
@@ -199,21 +196,10 @@ func ScorecardTests(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		// This test is far too inconsistent and unreliable to be meaningful,
-		// so it has been disabled
-		/*
-			fmt.Println("Checking that operator actions are reflected in status")
-			err = checkStatusUpdate(runtimeClient, obj)
-			if err != nil {
-				return err
-			}
-		*/
-		fmt.Println("Checking that writing into CRs has an effect")
-		logs, err := writingIntoCRsHasEffect(obj)
-		if err != nil {
+		fmt.Println("Running user-defined scorecard tests")
+		if err := userDefinedTests(obj); err != nil {
 			return err
 		}
-		log.Debugf("Scorecard Proxy Logs: %v\n", logs)
 	} else {
 		// checkSpecAndStat is used to make sure the operator is ready in this case
 		// the boolean argument set at the end tells the function not to add the result to scTests

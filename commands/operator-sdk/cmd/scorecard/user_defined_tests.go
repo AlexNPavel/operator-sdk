@@ -433,12 +433,55 @@ func checkStatus(status map[string]interface{}, obj *unstructured.Unstructured) 
 	return compareManifests(status, objStatus)
 }
 
-func userDefinedTests() error {
+func userDefinedTests(origObj *unstructured.Unstructured) error {
+	objCopy := &unstructured.Unstructured{}
+	origObj.DeepCopyInto(objCopy)
+	err := runtimeClient.Delete(context.TODO(), objCopy)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	// delete changes the object, so we need to reset it
+	origObj.DeepCopyInto(objCopy)
+	origObjKey, err := client.ObjectKeyFromObject(objCopy)
+	if err != nil {
+		return err
+	}
+	err = wait.PollImmediate(time.Second*1, time.Second*10, func() (bool, error) {
+		err = runtimeClient.Get(context.TODO(), origObjKey, objCopy)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+			return false, fmt.Errorf("error encountered during deletion of resource type %v with namespace/name (%+v): %v", objCopy.GetObjectKind().GroupVersionKind().Kind, origObjKey, err)
+		}
+		return false, nil
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// reset resource version, since we are creating new object
+		objCopy.SetResourceVersion("")
+		err := runtimeClient.Create(context.TODO(), objCopy)
+		if err != nil {
+			log.Errorf("failed to re-create CR: %v", err)
+		}
+		err = checkSpecAndStat(runtimeClient, objCopy, true)
+		if err != nil {
+			log.Errorf("failed waiting for re-created CR to be ready: %v", err)
+		}
+	}()
+	hasEffectTest := scorecardTest{testType: basicOperator, name: "Writing into CRs has an effect"}
+	opActionsStatusTest := scorecardTest{testType: basicOperator, name: "Operator actions are reflected in status"}
 	userDefinedTests := []UserDefinedTest{}
 	if !viper.IsSet("functional_tests") {
-		return errors.New("functional_tests config not set")
+		// set maxPoints to prevent full points on failure
+		hasEffectTest.maximumPoints = 1
+		opActionsStatusTest.maximumPoints = 1
+		scTests = append(scTests, hasEffectTest, opActionsStatusTest)
+		return nil
 	}
-	err := viper.UnmarshalKey("functional_tests", &userDefinedTests)
+	err = viper.UnmarshalKey("functional_tests", &userDefinedTests)
 	if err != nil {
 		return err
 	}
@@ -447,6 +490,8 @@ func userDefinedTests() error {
 		return err
 	}
 	for _, test := range userDefinedTests {
+		hasEffectTest.maximumPoints++
+		opActionsStatusTest.maximumPoints++
 		obj, err := yamlToUnstructured(test.CRPath)
 		if err != nil {
 			return fmt.Errorf("failed to decode custom resource manifest into object: %s", err)
@@ -461,24 +506,22 @@ func userDefinedTests() error {
 			}
 		}()
 		resPass, err := checkResources(test.Expected.Resources)
-		if !resPass {
-			log.Info("ResPass failed")
-		} else {
-			log.Info("ResPass succeeded")
+		if resPass {
+			hasEffectTest.earnedPoints++
 		}
 		if err != nil {
 			return err
 		}
 		statPass, err := checkStatus(test.Expected.Status, obj)
-		if !statPass {
-			log.Info("StatPass failed")
-		} else {
-			log.Info("StatPass succeeded")
+		if statPass {
+			opActionsStatusTest.earnedPoints++
 		}
 		if err != nil {
 			return err
 		}
-		for index, mod := range test.Modifications {
+		for _, mod := range test.Modifications {
+			hasEffectTest.maximumPoints++
+			opActionsStatusTest.maximumPoints++
 			objKey, err := client.ObjectKeyFromObject(obj)
 			if err != nil {
 				return err
@@ -493,19 +536,15 @@ func userDefinedTests() error {
 				return err
 			}
 			resPass, err := checkResources(mod.Expected.Resources)
-			if !resPass {
-				log.Infof("ResPass%d failed", index)
-			} else {
-				log.Infof("ResPass%d succeeded", index)
+			if resPass {
+				hasEffectTest.earnedPoints++
 			}
 			if err != nil {
 				return err
 			}
 			statPass, err := checkStatus(test.Expected.Status, obj)
-			if !statPass {
-				log.Infof("StatPass%d failed", index)
-			} else {
-				log.Infof("StatPass%d succeeded", index)
+			if statPass {
+				opActionsStatusTest.earnedPoints++
 			}
 			if err != nil {
 				return err
@@ -516,5 +555,6 @@ func userDefinedTests() error {
 			return err
 		}
 	}
+	scTests = append(scTests, hasEffectTest, opActionsStatusTest)
 	return nil
 }
