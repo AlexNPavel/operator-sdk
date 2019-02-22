@@ -454,6 +454,12 @@ func userDefinedTests() error {
 		if err := createFromYAMLFile(test.CRPath); err != nil {
 			return fmt.Errorf("failed to create cr resource: %v", err)
 		}
+		defer func() {
+			err := runtimeClient.Delete(context.TODO(), obj)
+			if err != nil && !apierrors.IsNotFound(err) {
+				log.Errorf("Failed to delete resource type %s: %s, (%v)", obj.GetKind(), obj.GetName(), err)
+			}
+		}()
 		resPass, err := checkResources(test.Expected.Resources)
 		if !resPass {
 			log.Info("ResPass failed")
@@ -506,7 +512,7 @@ func userDefinedTests() error {
 			}
 		}
 		err = runtimeClient.Delete(context.TODO(), obj)
-		if err != nil {
+		if err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}
