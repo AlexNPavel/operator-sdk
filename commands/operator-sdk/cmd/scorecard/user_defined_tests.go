@@ -296,7 +296,8 @@ func getMatchingLeaves(config, manifest interface{}) ([]map[string]interface{}, 
 	if reflect.ValueOf(config).Kind() == reflect.Slice {
 		configSlice, ok := config.([]interface{})
 		if !ok {
-			return nil, errors.New("Wat")
+			// is this case possible or will a slice always be castable to []interface{}?
+			return nil, errors.New("slice is not a []interface{}")
 		}
 		manSlice, ok := manifest.([]interface{})
 		if !ok {
@@ -464,11 +465,11 @@ func userDefinedTests(origObj *unstructured.Unstructured) error {
 		objCopy.SetResourceVersion("")
 		err := runtimeClient.Create(context.TODO(), objCopy)
 		if err != nil {
-			log.Errorf("failed to re-create CR: %v", err)
+			log.Errorf("Failed to re-create CR: %v", err)
 		}
 		err = checkSpecAndStat(runtimeClient, objCopy, true)
 		if err != nil {
-			log.Errorf("failed waiting for re-created CR to be ready: %v", err)
+			log.Errorf("Failed waiting for re-created CR to be ready: %v", err)
 		}
 	}()
 	hasEffectTest := scorecardTest{testType: basicOperator, name: "Writing into CRs has an effect"}

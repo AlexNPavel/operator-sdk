@@ -24,31 +24,31 @@ func TestUserDefinedTests(t *testing.T) {
 	userDefinedTests := []UserDefinedTest{}
 	err := yaml.Unmarshal([]byte(userDefinedTestsConfig), &userDefinedTests)
 	if err != nil {
-		t.Fatalf("could not unmarshal config: %v", err)
+		t.Fatalf("Could not unmarshal config: %v", err)
 	}
 	depYAMLUnmarshalled := make(map[string]interface{})
 	err = yaml.Unmarshal([]byte(userDefinedTestsDepYAML), &depYAMLUnmarshalled)
 	if err != nil {
-		t.Fatalf("could not unmarshal dep: %v", err)
+		t.Fatalf("Could not unmarshal dep: %v", err)
 	}
 	depPass, err := compareManifests(userDefinedTests[0].Expected.Resources[0], depYAMLUnmarshalled)
 	if !depPass {
-		t.Errorf("dep pass failed")
+		t.Errorf("Dep pass failed")
 	}
 	if err != nil {
-		t.Errorf("dep pass error: %v", err)
+		t.Errorf("Dep pass error: %v", err)
 	}
 	statusYAMLUnmarshalled := make(map[string]interface{})
 	err = yaml.Unmarshal([]byte(userDefinedTestsStatusYAML), &statusYAMLUnmarshalled)
 	if err != nil {
-		t.Fatalf("could not unmarshal status: %v", err)
+		t.Fatalf("Could not unmarshal status: %v", err)
 	}
 	statusPass, err := compareManifests(userDefinedTests[0].Expected.Status, statusYAMLUnmarshalled)
 	if !statusPass {
-		t.Errorf("status pass failed")
+		t.Errorf("Status pass failed")
 	}
 	if err != nil {
-		t.Errorf("status pass error: %v", err)
+		t.Errorf("Status pass error: %v", err)
 	}
 }
 
