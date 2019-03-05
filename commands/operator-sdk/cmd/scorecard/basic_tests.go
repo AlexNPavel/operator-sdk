@@ -34,8 +34,8 @@ import (
 // will not store the result of the test in scTests and will instead just wait until the spec and
 // status blocks exist or return an error after the timeout.
 func checkSpecAndStat(runtimeClient client.Client, obj *unstructured.Unstructured, noStore bool) error {
-	testSpec := scorecardTest{testType: basicOperator, name: "Spec Block Exists", maximumPoints: 1}
-	testStat := scorecardTest{testType: basicOperator, name: "Status Block Exist", maximumPoints: 1}
+	testSpec := ScorecardTest{TestType: basicOperator, Name: "Spec Block Exists", MaximumPoints: 1}
+	testStat := ScorecardTest{TestType: basicOperator, Name: "Status Block Exist", MaximumPoints: 1}
 	err := wait.Poll(time.Second*1, time.Second*time.Duration(viper.GetInt64(InitTimeoutOpt)), func() (bool, error) {
 		err := runtimeClient.Get(context.TODO(), types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}, obj)
 		if err != nil {
@@ -43,12 +43,12 @@ func checkSpecAndStat(runtimeClient client.Client, obj *unstructured.Unstructure
 		}
 		var specPass, statusPass bool
 		if obj.Object["spec"] != nil {
-			testSpec.earnedPoints = 1
+			testSpec.EarnedPoints = 1
 			specPass = true
 		}
 
 		if obj.Object["status"] != nil {
-			testStat.earnedPoints = 1
+			testStat.EarnedPoints = 1
 			statusPass = true
 		}
 		return statusPass && specPass, nil
@@ -59,10 +59,10 @@ func checkSpecAndStat(runtimeClient client.Client, obj *unstructured.Unstructure
 	if err != nil && err != wait.ErrWaitTimeout {
 		return err
 	}
-	if testSpec.earnedPoints != 1 {
+	if testSpec.EarnedPoints != 1 {
 		scSuggestions = append(scSuggestions, "Add a 'spec' field to your Custom Resource")
 	}
-	if testStat.earnedPoints != 1 {
+	if testStat.EarnedPoints != 1 {
 		scSuggestions = append(scSuggestions, "Add a 'status' field to your Custom Resource")
 	}
 	return nil
@@ -75,7 +75,7 @@ func checkSpecAndStat(runtimeClient client.Client, obj *unstructured.Unstructure
 // know much about how the operators we are testing actually work and may pass an invalid value. In the future, we
 // should use user-specified tests
 func checkStatusUpdate(runtimeClient client.Client, obj *unstructured.Unstructured) error {
-	test := scorecardTest{testType: basicOperator, name: "Operator actions are reflected in status", maximumPoints: 1}
+	test := ScorecardTest{TestType: basicOperator, Name: "Operator actions are reflected in status", MaximumPoints: 1}
 	err := runtimeClient.Get(context.TODO(), types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}, obj)
 	if err != nil {
 		return fmt.Errorf("error getting custom resource: %v", err)
@@ -91,12 +91,12 @@ func checkStatusUpdate(runtimeClient client.Client, obj *unstructured.Unstructur
 	specMap := obj.Object["spec"].(map[string]interface{})
 	err = modifySpecAndCheck(specMap, obj)
 	if err != nil {
-		test.earnedPoints = 0
+		test.EarnedPoints = 0
 		scSuggestions = append(scSuggestions, "Make sure that the 'status' block is always updated to reflect changes after the 'spec' block is changed")
 		scTests = append(scTests, test)
 		return nil
 	}
-	test.earnedPoints = 1
+	test.EarnedPoints = 1
 	scTests = append(scTests, test)
 	return nil
 }
@@ -163,7 +163,7 @@ func modifySpecAndCheck(specMap map[string]interface{}, obj *unstructured.Unstru
 // wiritingIntoCRsHasEffect simply looks at the proxy logs and verifies that the operator is sending PUT
 // and/or POST requests to the API server, which should mean that it is creating or modifying resources.
 func writingIntoCRsHasEffect(obj *unstructured.Unstructured) (string, error) {
-	test := scorecardTest{testType: basicOperator, name: "Writing into CRs has an effect", maximumPoints: 1}
+	test := ScorecardTest{TestType: basicOperator, Name: "Writing into CRs has an effect", MaximumPoints: 1}
 	logs, err := getProxyLogs()
 	if err != nil {
 		return "", err
@@ -178,12 +178,12 @@ func writingIntoCRsHasEffect(obj *unstructured.Unstructured) (string, error) {
 			continue
 		}
 		if method == "PUT" || method == "POST" {
-			test.earnedPoints = 1
+			test.EarnedPoints = 1
 			break
 		}
 	}
 	scTests = append(scTests, test)
-	if test.earnedPoints != 1 {
+	if test.EarnedPoints != 1 {
 		scSuggestions = append(scSuggestions, "The operator should write into objects to update state. No PUT or POST requests from you operator were recorded by the scorecard.")
 	}
 	return logs, nil

@@ -67,19 +67,19 @@ const (
 )
 
 // TODO: add point weights to tests
-type scorecardTest struct {
-	testType      string
-	name          string
-	description   string
-	earnedPoints  int
-	maximumPoints int
+type ScorecardTest struct {
+	TestType      string
+	Name          string
+	Description   string
+	EarnedPoints  int
+	MaximumPoints int
 }
 
 type cleanupFn func() error
 
 var (
 	kubeconfig     *rest.Config
-	scTests        []scorecardTest
+	scTests        []ScorecardTest
 	scSuggestions  []string
 	dynamicDecoder runtime.Decoder
 	runtimeClient  client.Client
@@ -197,10 +197,6 @@ func ScorecardTests(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println("Running user-defined scorecard tests")
-		if err := userDefinedTests(obj); err != nil {
-			return err
-		}
 	} else {
 		// checkSpecAndStat is used to make sure the operator is ready in this case
 		// the boolean argument set at the end tells the function not to add the result to scTests
@@ -258,14 +254,14 @@ func ScorecardTests(cmd *cobra.Command, args []string) error {
 	for _, testType := range enabledTestTypes {
 		fmt.Printf("%s:\n", testType)
 		for _, test := range scTests {
-			if test.testType == testType {
-				if !(test.earnedPoints == 0 && test.maximumPoints == 0) {
-					fmt.Printf("\t%s: %d/%d points\n", test.name, test.earnedPoints, test.maximumPoints)
+			if test.TestType == testType {
+				if !(test.EarnedPoints == 0 && test.MaximumPoints == 0) {
+					fmt.Printf("\t%s: %d/%d points\n", test.Name, test.EarnedPoints, test.MaximumPoints)
 				} else {
-					fmt.Printf("\t%s: N/A (depends on an earlier test that failed)\n", test.name)
+					fmt.Printf("\t%s: N/A (depends on an earlier test that failed)\n", test.Name)
 				}
-				totalEarned += test.earnedPoints
-				totalMax += test.maximumPoints
+				totalEarned += test.EarnedPoints
+				totalMax += test.MaximumPoints
 			}
 		}
 	}

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package scorecard
+package lib
 
 import (
 	"context"
@@ -22,16 +22,13 @@ import (
 	"strings"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/util/wait"
-
 	"github.com/ghodss/yaml"
-	goyaml "gopkg.in/yaml.v2"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
+	scorecard "github.com/operator-framework/operator-sdk/commands/operator-sdk/cmd/scorecard"
 	log "github.com/sirupsen/logrus"
-	"github.com/spf13/viper"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // UserDefinedTest contains a user defined test. User passes tests as an array using the `functional_tests` viper config
@@ -58,80 +55,6 @@ type Modification struct {
 	Spec map[string]interface{} `mapstructure:"spec"`
 	// Expected resources and status
 	Expected *Expected `mapstructure:"expected"`
-}
-
-func fixExpected(exp *Expected) (*Expected, error) {
-	fixedResources := make([]map[string]interface{}, 0, 0)
-	for _, item := range exp.Resources {
-		marshaled, err := goyaml.Marshal(item)
-		if err != nil {
-			return nil, err
-		}
-		strMap := make(map[string]interface{})
-		err = yaml.Unmarshal(marshaled, &strMap)
-		if err != nil {
-			return nil, err
-		}
-		fixedResources = append(fixedResources, strMap)
-	}
-	marshaledStat, err := goyaml.Marshal(exp.Status)
-	if err != nil {
-		return nil, err
-	}
-	fixedStat := make(map[string]interface{})
-	err = yaml.Unmarshal(marshaledStat, &fixedStat)
-	if err != nil {
-		return nil, err
-	}
-	return &Expected{Resources: fixedResources, Status: fixedStat}, nil
-}
-
-func fixModifications(modifications []Modification) ([]Modification, error) {
-	var fixedModifications []Modification
-	for _, mod := range modifications {
-		fixedMod := Modification{}
-		marshaledSpec, err := goyaml.Marshal(mod.Spec)
-		if err != nil {
-			return nil, err
-		}
-		fixedSpec := make(map[string]interface{})
-		err = yaml.Unmarshal(marshaledSpec, &fixedSpec)
-		if err != nil {
-			return nil, err
-		}
-		fixedMod.Spec = fixedSpec
-		fixedExpected, err := fixExpected(mod.Expected)
-		if err != nil {
-			return nil, err
-		}
-		fixedMod.Expected = fixedExpected
-		fixedModifications = append(fixedModifications, fixedMod)
-	}
-	return fixedModifications, nil
-}
-
-// fixMaps converts YAML style maps (whose keys can be interfaces) to
-// JSON style maps (whose keys can only be strings). This fixes many
-// compatibility issues for us when working with kubernetes. This
-// may be possible directly with go-yaml in the future:
-// https://github.com/go-yaml/yaml/pull/385
-func fixMaps(tests []UserDefinedTest) ([]UserDefinedTest, error) {
-	var fixedTests []UserDefinedTest
-	for _, test := range tests {
-		fixedTest := UserDefinedTest{CRPath: test.CRPath}
-		fixedExpected, err := fixExpected(test.Expected)
-		if err != nil {
-			return nil, err
-		}
-		fixedTest.Expected = fixedExpected
-		fixedModifications, err := fixModifications(test.Modifications)
-		if err != nil {
-			return nil, err
-		}
-		fixedTest.Modifications = fixedModifications
-		fixedTests = append(fixedTests, fixedTest)
-	}
-	return fixedTests, nil
 }
 
 func tryConvertToFloat64(i interface{}) (float64, bool) {
@@ -434,65 +357,17 @@ func checkStatus(status map[string]interface{}, obj *unstructured.Unstructured) 
 	return compareManifests(status, objStatus)
 }
 
-func userDefinedTests(origObj *unstructured.Unstructured) error {
-	objCopy := &unstructured.Unstructured{}
-	origObj.DeepCopyInto(objCopy)
-	err := runtimeClient.Delete(context.TODO(), objCopy)
-	if err != nil && !apierrors.IsNotFound(err) {
-		return err
-	}
-	// delete changes the object, so we need to reset it
-	origObj.DeepCopyInto(objCopy)
-	origObjKey, err := client.ObjectKeyFromObject(objCopy)
-	if err != nil {
-		return err
-	}
-	err = wait.PollImmediate(time.Second*1, time.Second*10, func() (bool, error) {
-		err = runtimeClient.Get(context.TODO(), origObjKey, objCopy)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return true, nil
-			}
-			return false, fmt.Errorf("error encountered during deletion of resource type %v with namespace/name (%+v): %v", objCopy.GetObjectKind().GroupVersionKind().Kind, origObjKey, err)
-		}
-		return false, nil
-	})
-	if err != nil {
-		return err
-	}
-	defer func() {
-		// reset resource version, since we are creating new object
-		objCopy.SetResourceVersion("")
-		err := runtimeClient.Create(context.TODO(), objCopy)
-		if err != nil {
-			log.Errorf("Failed to re-create CR: %v", err)
-		}
-		err = checkSpecAndStat(runtimeClient, objCopy, true)
-		if err != nil {
-			log.Errorf("Failed waiting for re-created CR to be ready: %v", err)
-		}
-	}()
-	hasEffectTest := scorecardTest{testType: basicOperator, name: "Writing into CRs has an effect"}
-	opActionsStatusTest := scorecardTest{testType: basicOperator, name: "Operator actions are reflected in status"}
+func UserDefinedTests(yamlBytes []byte) error {
+	hasEffectTest := scorecard.ScorecardTest{Name: "Writing into CRs has an effect"}
+	opActionsStatusTest := scorecard.ScorecardTest{Name: "Operator actions are reflected in status"}
 	userDefinedTests := []UserDefinedTest{}
-	if !viper.IsSet("functional_tests") {
-		// set maxPoints to prevent full points on failure
-		hasEffectTest.maximumPoints = 1
-		opActionsStatusTest.maximumPoints = 1
-		scTests = append(scTests, hasEffectTest, opActionsStatusTest)
-		return nil
-	}
-	err = viper.UnmarshalKey("functional_tests", &userDefinedTests)
-	if err != nil {
-		return err
-	}
-	userDefinedTests, err = fixMaps(userDefinedTests)
+	err := yaml.Unmarshal(yamlBytes, &userDefinedTests)
 	if err != nil {
 		return err
 	}
 	for _, test := range userDefinedTests {
-		hasEffectTest.maximumPoints++
-		opActionsStatusTest.maximumPoints++
+		hasEffectTest.MaximumPoints++
+		opActionsStatusTest.MaximumPoints++
 		obj, err := yamlToUnstructured(test.CRPath)
 		if err != nil {
 			return fmt.Errorf("failed to decode custom resource manifest into object: %s", err)
@@ -508,21 +383,21 @@ func userDefinedTests(origObj *unstructured.Unstructured) error {
 		}()
 		resPass, err := checkResources(test.Expected.Resources)
 		if resPass {
-			hasEffectTest.earnedPoints++
+			hasEffectTest.EarnedPoints++
 		}
 		if err != nil {
 			return err
 		}
 		statPass, err := checkStatus(test.Expected.Status, obj)
 		if statPass {
-			opActionsStatusTest.earnedPoints++
+			opActionsStatusTest.EarnedPoints++
 		}
 		if err != nil {
 			return err
 		}
 		for _, mod := range test.Modifications {
-			hasEffectTest.maximumPoints++
-			opActionsStatusTest.maximumPoints++
+			hasEffectTest.MaximumPoints++
+			opActionsStatusTest.MaximumPoints++
 			objKey, err := client.ObjectKeyFromObject(obj)
 			if err != nil {
 				return err
@@ -538,14 +413,14 @@ func userDefinedTests(origObj *unstructured.Unstructured) error {
 			}
 			resPass, err := checkResources(mod.Expected.Resources)
 			if resPass {
-				hasEffectTest.earnedPoints++
+				hasEffectTest.EarnedPoints++
 			}
 			if err != nil {
 				return err
 			}
 			statPass, err := checkStatus(test.Expected.Status, obj)
 			if statPass {
-				opActionsStatusTest.earnedPoints++
+				opActionsStatusTest.EarnedPoints++
 			}
 			if err != nil {
 				return err

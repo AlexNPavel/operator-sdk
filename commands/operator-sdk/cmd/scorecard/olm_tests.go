@@ -61,7 +61,7 @@ func matchVersion(version string, crd *apiextv1beta1.CustomResourceDefinition) b
 
 // crdsHaveValidation makes sure that all CRDs have a validation block
 func crdsHaveValidation(crdsDir string, runtimeClient client.Client, obj *unstructured.Unstructured) error {
-	test := scorecardTest{testType: olmIntegration, name: "Provided APIs have validation"}
+	test := ScorecardTest{TestType: olmIntegration, Name: "Provided APIs have validation"}
 	crds, err := k8sutil.GetCRDs(crdsDir)
 	if err != nil {
 		return fmt.Errorf("failed to get CRDs in %s directory: %v", crdsDir, err)
@@ -72,7 +72,7 @@ func crdsHaveValidation(crdsDir string, runtimeClient client.Client, obj *unstru
 	}
 	// TODO: we need to make this handle multiple CRs better/correctly
 	for _, crd := range crds {
-		test.maximumPoints++
+		test.MaximumPoints++
 		if crd.Spec.Validation == nil {
 			scSuggestions = append(scSuggestions, fmt.Sprintf("Add CRD validation for %s/%s", crd.Spec.Names.Kind, crd.Spec.Version))
 			continue
@@ -81,7 +81,7 @@ func crdsHaveValidation(crdsDir string, runtimeClient client.Client, obj *unstru
 		gvk := obj.GroupVersionKind()
 		// Only check the validation block if the CRD and CR have the same Kind and Version
 		if !(matchVersion(gvk.Version, crd) && matchKind(gvk.Kind, crd.Spec.Names.Kind)) {
-			test.earnedPoints++
+			test.EarnedPoints++
 			continue
 		}
 		failed := false
@@ -104,7 +104,7 @@ func crdsHaveValidation(crdsDir string, runtimeClient client.Client, obj *unstru
 			}
 		}
 		if !failed {
-			test.earnedPoints++
+			test.EarnedPoints++
 		}
 	}
 	scTests = append(scTests, test)
@@ -116,9 +116,9 @@ func crdsHaveValidation(crdsDir string, runtimeClient client.Client, obj *unstru
 // actual used resources of one CRD, but only the existence of a resources section
 // for other CRDs
 func crdsHaveResources(obj *unstructured.Unstructured, csv *olmapiv1alpha1.ClusterServiceVersion) {
-	test := scorecardTest{testType: olmIntegration, name: "Owned CRDs have resources listed"}
+	test := ScorecardTest{TestType: olmIntegration, Name: "Owned CRDs have resources listed"}
 	for _, crd := range csv.Spec.CustomResourceDefinitions.Owned {
-		test.maximumPoints++
+		test.MaximumPoints++
 		gvk := obj.GroupVersionKind()
 		if strings.EqualFold(crd.Version, gvk.Version) && matchKind(gvk.Kind, crd.Kind) {
 			resources, err := getUsedResources()
@@ -138,16 +138,16 @@ func crdsHaveResources(obj *unstructured.Unstructured, csv *olmapiv1alpha1.Clust
 				}
 			}
 			if allResourcesListed {
-				test.earnedPoints++
+				test.EarnedPoints++
 			}
 		} else {
 			if len(crd.Resources) > 0 {
-				test.earnedPoints++
+				test.EarnedPoints++
 			}
 		}
 	}
 	scTests = append(scTests, test)
-	if test.earnedPoints == 0 {
+	if test.EarnedPoints == 0 {
 		scSuggestions = append(scSuggestions, "Add resources to owned CRDs")
 	}
 }
@@ -239,19 +239,19 @@ func getUsedResources() ([]schema.GroupVersionKind, error) {
 
 // annotationsContainExamples makes sure that the CSVs list at least 1 example for the CR
 func annotationsContainExamples(csv *olmapiv1alpha1.ClusterServiceVersion) {
-	test := scorecardTest{testType: olmIntegration, name: "CRs have at least 1 example", maximumPoints: 1}
+	test := ScorecardTest{TestType: olmIntegration, Name: "CRs have at least 1 example", MaximumPoints: 1}
 	if csv.Annotations != nil && csv.Annotations["alm-examples"] != "" {
-		test.earnedPoints = 1
+		test.EarnedPoints = 1
 	}
 	scTests = append(scTests, test)
-	if test.earnedPoints == 0 {
-		scSuggestions = append(scSuggestions, "Add an alm-examples annotation to your CSV to pass the "+test.name+" test")
+	if test.EarnedPoints == 0 {
+		scSuggestions = append(scSuggestions, "Add an alm-examples annotation to your CSV to pass the "+test.Name+" test")
 	}
 }
 
 // statusDescriptors makes sure that all status fields found in the created CR has a matching descriptor in the CSV
 func statusDescriptors(csv *olmapiv1alpha1.ClusterServiceVersion, runtimeClient client.Client, obj *unstructured.Unstructured) error {
-	test := scorecardTest{testType: olmIntegration, name: "Status fields with descriptors"}
+	test := ScorecardTest{TestType: olmIntegration, Name: "Status fields with descriptors"}
 	err := runtimeClient.Get(context.TODO(), types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}, obj)
 	if err != nil {
 		return err
@@ -262,7 +262,7 @@ func statusDescriptors(csv *olmapiv1alpha1.ClusterServiceVersion, runtimeClient 
 		return nil
 	}
 	statusBlock := obj.Object["status"].(map[string]interface{})
-	test.maximumPoints = len(statusBlock)
+	test.MaximumPoints = len(statusBlock)
 	var crd *olmapiv1alpha1.CRDDescription
 	for _, owned := range csv.Spec.CustomResourceDefinitions.Owned {
 		if owned.Kind == obj.GetKind() {
@@ -277,7 +277,7 @@ func statusDescriptors(csv *olmapiv1alpha1.ClusterServiceVersion, runtimeClient 
 	for key := range statusBlock {
 		for _, statDesc := range crd.StatusDescriptors {
 			if statDesc.Path == key {
-				test.earnedPoints++
+				test.EarnedPoints++
 				delete(statusBlock, key)
 				break
 			}
@@ -292,7 +292,7 @@ func statusDescriptors(csv *olmapiv1alpha1.ClusterServiceVersion, runtimeClient 
 
 // specDescriptors makes sure that all spec fields found in the created CR has a matching descriptor in the CSV
 func specDescriptors(csv *olmapiv1alpha1.ClusterServiceVersion, runtimeClient client.Client, obj *unstructured.Unstructured) error {
-	test := scorecardTest{testType: olmIntegration, name: "Spec fields with descriptors"}
+	test := ScorecardTest{TestType: olmIntegration, Name: "Spec fields with descriptors"}
 	err := runtimeClient.Get(context.TODO(), types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}, obj)
 	if err != nil {
 		return err
@@ -303,7 +303,7 @@ func specDescriptors(csv *olmapiv1alpha1.ClusterServiceVersion, runtimeClient cl
 		return nil
 	}
 	specBlock := obj.Object["spec"].(map[string]interface{})
-	test.maximumPoints = len(specBlock)
+	test.MaximumPoints = len(specBlock)
 	var crd *olmapiv1alpha1.CRDDescription
 	for _, owned := range csv.Spec.CustomResourceDefinitions.Owned {
 		if owned.Kind == obj.GetKind() {
@@ -318,7 +318,7 @@ func specDescriptors(csv *olmapiv1alpha1.ClusterServiceVersion, runtimeClient cl
 	for key := range specBlock {
 		for _, specDesc := range crd.SpecDescriptors {
 			if specDesc.Path == key {
-				test.earnedPoints++
+				test.EarnedPoints++
 				delete(specBlock, key)
 				break
 			}
