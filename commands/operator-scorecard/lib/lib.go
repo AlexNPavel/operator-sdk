@@ -15,9 +15,11 @@
 package lib
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"reflect"
 	"strings"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"github.com/ghodss/yaml"
 	scorecard "github.com/operator-framework/operator-sdk/commands/operator-sdk/cmd/scorecard"
 	log "github.com/sirupsen/logrus"
+	"github.com/spf13/viper"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -55,6 +58,28 @@ type Modification struct {
 	Spec map[string]interface{} `mapstructure:"spec"`
 	// Expected resources and status
 	Expected *Expected `mapstructure:"expected"`
+}
+
+// yamlToUnstructured decodes a yaml file into an unstructured object
+func yamlToUnstructured(yamlPath string) (*unstructured.Unstructured, error) {
+	yamlFile, err := ioutil.ReadFile(yamlPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file %s: %v", yamlPath, err)
+	}
+	if bytes.Contains(yamlFile, []byte("\n---\n")) {
+		return nil, fmt.Errorf("custom resource manifest cannot have more than 1 resource")
+	}
+	obj := &unstructured.Unstructured{}
+	jsonSpec, err := yaml.YAMLToJSON(yamlFile)
+	if err != nil {
+		return nil, fmt.Errorf("could not convert yaml file to json: %v", err)
+	}
+	if err := obj.UnmarshalJSON(jsonSpec); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal custom resource manifest to unstructured: %s", err)
+	}
+	// set the namespace
+	obj.SetNamespace(viper.GetString(NamespaceOpt))
+	return obj, nil
 }
 
 func tryConvertToFloat64(i interface{}) (float64, bool) {
