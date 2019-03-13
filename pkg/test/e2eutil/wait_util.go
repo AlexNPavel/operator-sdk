@@ -22,11 +22,12 @@ import (
 	"github.com/operator-framework/operator-sdk/pkg/test"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // WaitForDeployment checks to see if a given deployment has a certain number of available replicas after a specified amount of time
@@ -71,27 +72,29 @@ func waitForDeployment(t *testing.T, kubeclient kubernetes.Interface, namespace,
 	return nil
 }
 
-func waitForPod(t *testing.T, runtimeClient test.FrameworkClient, namespace, name string, retryInterval, timeout time.Duration) error {
-	pod := &corev1.Pod{}
-	err := wait.Poll(retryInterval, timeout, func() (done bool, err error) {
-		err = runtimeClient.Get(context.TODO(), client.ObjectKey{Name: name, Namespace: namespace}, pod)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				t.Logf("Waiting for availability of %s pod\n", name)
-				return false, nil
-			}
-			return false, err
-		}
+func WaitForDeletion(t *testing.T, dynclient client.Client, obj runtime.Object, retryInterval, timeout time.Duration) error {
+	key, err := client.ObjectKeyFromObject(obj)
+	if err != nil {
+		return err
+	}
 
-		if pod.Status.Phase == corev1.PodRunning {
+	kind := obj.GetObjectKind().GroupVersionKind().Kind
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	err = wait.Poll(retryInterval, timeout, func() (done bool, err error) {
+		err = dynclient.Get(ctx, key, obj)
+		if apierrors.IsNotFound(err) {
 			return true, nil
 		}
-		t.Logf("Waiting for full availability of %s pod\n", name)
+		if err != nil {
+			return false, err
+		}
+		t.Logf("Waiting for %s %s to be deleted\n", kind, key)
 		return false, nil
 	})
 	if err != nil {
 		return err
 	}
-	t.Logf("%s Pod available\n", name)
+	t.Logf("%s %s was deleted\n", kind, key)
 	return nil
 }
