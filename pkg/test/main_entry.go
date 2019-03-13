@@ -44,6 +44,8 @@ const (
 	LocalOperatorFlag     = "localOperator"
 )
 
+// MainEntry parses the flags set by the operator-sdk test command, configures the testing environment, and then
+// runs the tests
 func MainEntry(m *testing.M) {
 	projRoot := flag.String(ProjRootFlag, "", "path to project root")
 	kubeconfigPath := flag.String(KubeConfigFlag, "", "path to kubeconfig")
@@ -57,7 +59,11 @@ func MainEntry(m *testing.M) {
 	if err != nil {
 		log.Fatalf("Failed to change directory to project root: %v", err)
 	}
-	if err := setup(kubeconfigPath, namespacedManPath, *localOperator); err != nil {
+	namespace := ""
+	if *singleNamespace || *kubeconfigPath == "incluster" {
+		namespace = os.Getenv(TestNamespaceEnv)
+	}
+	if err := Setup(*kubeconfigPath, *namespacedManPath, namespace, *localOperator); err != nil {
 		log.Fatalf("Failed to set up framework: %v", err)
 	}
 	// setup local operator command, but don't start it yet
@@ -126,7 +132,7 @@ func MainEntry(m *testing.M) {
 		if err != nil {
 			log.Fatalf("Failed to read global resource manifest: %v", err)
 		}
-		err = ctx.createFromYAML(globalYAML, true, &CleanupOptions{TestContext: ctx})
+		err = ctx.CreateFromYAML(globalYAML, true, &CleanupOptions{TestContext: ctx})
 		if err != nil {
 			log.Fatalf("Failed to create resource(s) in global resource manifest: %v", err)
 		}
