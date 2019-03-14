@@ -26,13 +26,37 @@ import (
 
 	"github.com/ghodss/yaml"
 	scorecard "github.com/operator-framework/operator-sdk/commands/operator-sdk/cmd/scorecard"
+	framework "github.com/operator-framework/operator-sdk/pkg/test"
 	log "github.com/sirupsen/logrus"
-	"github.com/spf13/viper"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// SimpleScorecardTestConfig contains the user provided config as a yaml byte array
+type SimpleScorecardTestConfig struct {
+	Config []byte
+}
+
+// SimpleScorecardTest is a scorecard plugin test that creates and modifies CRs and checks that the CR's status is updated
+// as expected and the expected resources are created correctly
+type SimpleScorecardTest struct {
+	scorecard.TestInfo
+	SimpleScorecardTestConfig
+}
+
+// NewSimpleScorecardTest returns a new SimpleScorecardTest object
+func NewSimpleScorecardTest(conf SimpleScorecardTestConfig) *SimpleScorecardTest {
+	return &SimpleScorecardTest{
+		SimpleScorecardTestConfig: conf,
+		TestInfo: scorecard.TestInfo{
+			Name:        "Simple Scorecard Tests",
+			Description: "Simple Scorecard creates and modifies CRs based on a config and checks that the CR's status is properly updated and expected resources are created correctly",
+			Cumulative:  false,
+		},
+	}
+}
 
 // UserDefinedTest contains a user defined test. User passes tests as an array using the `functional_tests` viper config
 type UserDefinedTest struct {
@@ -60,6 +84,9 @@ type Modification struct {
 	Expected *Expected `mapstructure:"expected"`
 }
 
+var scSuggestions []string
+var scTests []scorecard.TestResult
+
 // yamlToUnstructured decodes a yaml file into an unstructured object
 func yamlToUnstructured(yamlPath string) (*unstructured.Unstructured, error) {
 	yamlFile, err := ioutil.ReadFile(yamlPath)
@@ -77,8 +104,6 @@ func yamlToUnstructured(yamlPath string) (*unstructured.Unstructured, error) {
 	if err := obj.UnmarshalJSON(jsonSpec); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal custom resource manifest to unstructured: %s", err)
 	}
-	// set the namespace
-	obj.SetNamespace(viper.GetString(NamespaceOpt))
 	return obj, nil
 }
 
@@ -350,7 +375,7 @@ func checkResources(resources []map[string]interface{}) (bool, error) {
 	for _, res := range resources {
 		tempUnstruct := unstructured.Unstructured{Object: res}
 		err := wait.Poll(time.Second*1, time.Second*30, func() (bool, error) {
-			err := runtimeClient.Get(context.TODO(), client.ObjectKey{Namespace: "default", Name: tempUnstruct.GetName()}, &tempUnstruct)
+			err := framework.Global.Client.Get(context.TODO(), client.ObjectKey{Namespace: "default", Name: tempUnstruct.GetName()}, &tempUnstruct)
 			if err != nil {
 				if apierrors.IsNotFound(err) {
 					return false, nil
@@ -371,7 +396,7 @@ func checkStatus(status map[string]interface{}, obj *unstructured.Unstructured) 
 	if err != nil {
 		return false, err
 	}
-	err = runtimeClient.Get(context.TODO(), objKey, obj)
+	err = framework.Global.Client.Get(context.TODO(), objKey, obj)
 	if err != nil {
 		return false, err
 	}
@@ -382,80 +407,92 @@ func checkStatus(status map[string]interface{}, obj *unstructured.Unstructured) 
 	return compareManifests(status, objStatus)
 }
 
-func UserDefinedTests(yamlBytes []byte) error {
-	hasEffectTest := scorecard.ScorecardTest{Name: "Writing into CRs has an effect"}
-	opActionsStatusTest := scorecard.ScorecardTest{Name: "Operator actions are reflected in status"}
+// Run - implemented Test interface
+func (t *SimpleScorecardTest) Run(goctx context.Context) *scorecard.TestResult {
+	res := &scorecard.TestResult{Test: t}
 	userDefinedTests := []UserDefinedTest{}
-	err := yaml.Unmarshal(yamlBytes, &userDefinedTests)
+	err := yaml.Unmarshal(t.Config, &userDefinedTests)
 	if err != nil {
-		return err
+		res.Errors = append(res.Errors, fmt.Errorf("failed to read config file"))
+		return res
 	}
 	for _, test := range userDefinedTests {
-		hasEffectTest.MaximumPoints++
-		opActionsStatusTest.MaximumPoints++
+		ctx := framework.NewTestCtx(nil)
+		defer ctx.Cleanup()
+		err := ctx.InitializeClusterResources(&framework.CleanupOptions{TestContext: ctx, Timeout: time.Second * 10, RetryInterval: time.Second * 1})
+		if err != nil {
+			res.Errors = append(res.Errors, fmt.Errorf("failed to create namespaced resources: %v", err))
+			ctx.Cleanup()
+			continue
+		}
+		res.MaximumPoints += 2
 		obj, err := yamlToUnstructured(test.CRPath)
 		if err != nil {
-			return fmt.Errorf("failed to decode custom resource manifest into object: %s", err)
+			res.Errors = append(res.Errors, fmt.Errorf("failed to decode custom resource manifest into object: %s", err))
+			ctx.Cleanup()
+			continue
 		}
-		if err := createFromYAMLFile(test.CRPath); err != nil {
-			return fmt.Errorf("failed to create cr resource: %v", err)
+		if err := framework.Global.Client.Create(goctx, obj, &framework.CleanupOptions{TestContext: ctx, Timeout: time.Second * 10, RetryInterval: time.Second * 1}); err != nil {
+			res.Errors = append(res.Errors, fmt.Errorf("failed to create cr resource: %v", err))
 		}
 		defer func() {
-			err := runtimeClient.Delete(context.TODO(), obj)
+			err := framework.Global.Client.Delete(goctx, obj)
 			if err != nil && !apierrors.IsNotFound(err) {
 				log.Errorf("Failed to delete resource type %s: %s, (%v)", obj.GetKind(), obj.GetName(), err)
 			}
 		}()
 		resPass, err := checkResources(test.Expected.Resources)
 		if resPass {
-			hasEffectTest.EarnedPoints++
+			res.EarnedPoints++
 		}
 		if err != nil {
-			return err
+			res.Errors = append(res.Errors, fmt.Errorf("an error occurred during a resource check: %v", err))
 		}
 		statPass, err := checkStatus(test.Expected.Status, obj)
 		if statPass {
-			opActionsStatusTest.EarnedPoints++
+			res.EarnedPoints++
 		}
 		if err != nil {
-			return err
+			res.Errors = append(res.Errors, fmt.Errorf("an error occurred during a status check: %v", err))
 		}
 		for _, mod := range test.Modifications {
-			hasEffectTest.MaximumPoints++
-			opActionsStatusTest.MaximumPoints++
+			res.MaximumPoints += 2
 			objKey, err := client.ObjectKeyFromObject(obj)
 			if err != nil {
-				return err
+				res.Errors = append(res.Errors, fmt.Errorf("failed to get object key from object: %v", err))
+				continue
 			}
-			err = runtimeClient.Get(context.TODO(), objKey, obj)
+			err = framework.Global.Client.Get(goctx, objKey, obj)
 			obj.Object["spec"], err = updateMap(obj.Object["spec"].(map[string]interface{}), mod.Spec)
 			if err != nil {
-				return err
+				res.Errors = append(res.Errors, fmt.Errorf("failed to update CR spec based on config: %v", err))
+				continue
 			}
-			err = runtimeClient.Update(context.TODO(), obj)
+			err = framework.Global.Client.Update(goctx, obj)
 			if err != nil {
-				return err
+				res.Errors = append(res.Errors, fmt.Errorf("client failed to update CR on server: %v", err))
+				continue
 			}
 			resPass, err := checkResources(mod.Expected.Resources)
 			if resPass {
-				hasEffectTest.EarnedPoints++
+				res.EarnedPoints++
 			}
 			if err != nil {
-				return err
+				res.Errors = append(res.Errors, fmt.Errorf("an error occured during a resource check: %v", err))
 			}
 			statPass, err := checkStatus(test.Expected.Status, obj)
 			if statPass {
-				opActionsStatusTest.EarnedPoints++
+				res.EarnedPoints++
 			}
 			if err != nil {
-				return err
+				res.Errors = append(res.Errors, fmt.Errorf("an error occured during a status check: %v", err))
 			}
 		}
-		err = runtimeClient.Delete(context.TODO(), obj)
-		if err != nil && !apierrors.IsNotFound(err) {
-			return err
-		}
+		ctx.Cleanup()
 	}
-	scTests = append(scTests, hasEffectTest, opActionsStatusTest)
-	return nil
+	// don't allow 0/0
+	if res.MaximumPoints == 0 {
+		res.MaximumPoints = 1
+	}
+	return res
 }
