@@ -63,10 +63,12 @@ type Framework struct {
 
 // Setup initializes the Global.Framework variable and its fields
 func Setup(kubeconfigPath, namespacedManPath, namespace string, localOperator bool) error {
+	if SingleNamespace == nil {
+		a := false
+		SingleNamespace = &a
+	}
 	if namespace != "" {
 		*SingleNamespace = true
-	} else if SingleNamespace == nil {
-		*SingleNamespace = false
 	}
 	var err error
 	var kubeconfig *rest.Config
