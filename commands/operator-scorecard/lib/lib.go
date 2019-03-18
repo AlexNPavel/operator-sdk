@@ -58,30 +58,30 @@ func NewSimpleScorecardTest(conf SimpleScorecardTestConfig) *SimpleScorecardTest
 	}
 }
 
-// UserDefinedTest contains a user defined test. User passes tests as an array using the `functional_tests` viper config
+// UserDefinedTest contains a user defined test
 type UserDefinedTest struct {
 	// Path to cr to be used for testing
-	CRPath string `mapstructure:"cr"`
+	CRPath string `json:"cr"`
 	// Expected resources and status
-	Expected *Expected `mapstructure:"expected"`
+	Expected Expected `json:"expected"`
 	// Sub-tests modifying a few fields with expected changes
-	Modifications []Modification `mapstructure:"modifications"`
+	Modifications []Modification `json:"modifications"`
 }
 
 // Expected holds expected resources and status of the CR
 type Expected struct {
 	// Resources expected to be created after the operator reacts to the CR
-	Resources []map[string]interface{} `mapstructure:"resources"`
+	Resources []map[string]interface{} `json:"resources"`
 	// Expected values in CR's status after the operator reacts to the CR
-	Status map[string]interface{} `mapstructure:"status"`
+	Status map[string]interface{} `json:"status"`
 }
 
 // Modification specifies a spec field to change in the CR with the expected results
 type Modification struct {
 	// a map of the spec fields to modify
-	Spec map[string]interface{} `mapstructure:"spec"`
+	Spec map[string]interface{} `json:"spec"`
 	// Expected resources and status
-	Expected *Expected `mapstructure:"expected"`
+	Expected Expected `json:"expected"`
 }
 
 var scSuggestions []string
@@ -371,11 +371,15 @@ func updateVal(source, change interface{}) (interface{}, error) {
 	return change, nil
 }
 
-func checkResources(resources []map[string]interface{}) (bool, error) {
+func checkResources(ctx *framework.TestCtx, resources []map[string]interface{}) (bool, error) {
+	namespace, err := ctx.GetNamespace()
+	if err != nil {
+		return false, fmt.Errorf("could not get namespace: %v", err)
+	}
 	for _, res := range resources {
 		tempUnstruct := unstructured.Unstructured{Object: res}
 		err := wait.Poll(time.Second*1, time.Second*30, func() (bool, error) {
-			err := framework.Global.Client.Get(context.TODO(), client.ObjectKey{Namespace: "default", Name: tempUnstruct.GetName()}, &tempUnstruct)
+			err := framework.Global.Client.Get(context.TODO(), client.ObjectKey{Namespace: namespace, Name: tempUnstruct.GetName()}, &tempUnstruct)
 			if err != nil {
 				if apierrors.IsNotFound(err) {
 					return false, nil
@@ -411,14 +415,15 @@ func checkStatus(status map[string]interface{}, obj *unstructured.Unstructured) 
 func (t *SimpleScorecardTest) Run(goctx context.Context) *scorecard.TestResult {
 	res := &scorecard.TestResult{Test: t}
 	userDefinedTests := []UserDefinedTest{}
+	fmt.Printf("\n%s\n", t.Config)
 	err := yaml.Unmarshal(t.Config, &userDefinedTests)
 	if err != nil {
 		res.Errors = append(res.Errors, fmt.Errorf("failed to read config file"))
 		return res
 	}
+	fmt.Printf("\nConfig %+v\n", userDefinedTests)
 	for _, test := range userDefinedTests {
 		ctx := framework.NewTestCtx(nil)
-		defer ctx.Cleanup()
 		err := ctx.InitializeClusterResources(&framework.CleanupOptions{TestContext: ctx, Timeout: time.Second * 10, RetryInterval: time.Second * 1})
 		if err != nil {
 			res.Errors = append(res.Errors, fmt.Errorf("failed to create namespaced resources: %v", err))
@@ -432,6 +437,13 @@ func (t *SimpleScorecardTest) Run(goctx context.Context) *scorecard.TestResult {
 			ctx.Cleanup()
 			continue
 		}
+		namespace, err := ctx.GetNamespace()
+		if err != nil {
+			res.Errors = append(res.Errors, fmt.Errorf("failed to get context namespace: %v", err))
+			ctx.Cleanup()
+			continue
+		}
+		obj.SetNamespace(namespace)
 		if err := framework.Global.Client.Create(goctx, obj, &framework.CleanupOptions{TestContext: ctx, Timeout: time.Second * 10, RetryInterval: time.Second * 1}); err != nil {
 			res.Errors = append(res.Errors, fmt.Errorf("failed to create cr resource: %v", err))
 		}
@@ -441,7 +453,7 @@ func (t *SimpleScorecardTest) Run(goctx context.Context) *scorecard.TestResult {
 				log.Errorf("Failed to delete resource type %s: %s, (%v)", obj.GetKind(), obj.GetName(), err)
 			}
 		}()
-		resPass, err := checkResources(test.Expected.Resources)
+		resPass, err := checkResources(ctx, test.Expected.Resources)
 		if resPass {
 			res.EarnedPoints++
 		}
@@ -473,7 +485,7 @@ func (t *SimpleScorecardTest) Run(goctx context.Context) *scorecard.TestResult {
 				res.Errors = append(res.Errors, fmt.Errorf("client failed to update CR on server: %v", err))
 				continue
 			}
-			resPass, err := checkResources(mod.Expected.Resources)
+			resPass, err := checkResources(ctx, mod.Expected.Resources)
 			if resPass {
 				res.EarnedPoints++
 			}

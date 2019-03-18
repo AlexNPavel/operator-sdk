@@ -23,7 +23,10 @@ import (
 	"os"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/operator-framework/operator-sdk/pkg/scaffold"
+	"github.com/operator-framework/operator-sdk/test/test-framework/pkg/apis"
 
 	"github.com/operator-framework/operator-sdk/internal/util/yamlutil"
 
@@ -86,7 +89,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not create global resources: %v", err)
 	}
+	memcachedList := &unstructured.UnstructuredList{}
+	memcachedList.SetAPIVersion("cache.example.com/v1alpha1")
+	memcachedList.SetKind("Memcached")
+	err = framework.AddToFrameworkScheme(apis.AddToScheme, memcachedList)
+	if err != nil {
+		log.Fatalf("Failed to add custom resource scheme to framework: %v", err)
+	}
 	test := lib.NewSimpleScorecardTest(lib.SimpleScorecardTestConfig{Config: yamlSpecs})
 	results := test.Run(context.TODO())
-	fmt.Printf("%+v", results)
+	fmt.Printf("\n%+v\n", results)
 }

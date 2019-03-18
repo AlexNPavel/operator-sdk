@@ -1,0 +1,45 @@
+-
+  cr: "deploy/crds/cache_v1alpha1_memcached_cr.yaml"
+  expected:
+    resources:
+      - apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: example-memcached
+        status:
+          readyReplicas: 3
+        spec:
+          template:
+            spec:
+              containers:
+                - image: memcached:1.4.36-alpine
+    status:
+      scorecard_function_length:
+        nodes: 3
+  modifications:
+    - spec:
+        size: 4
+      expected:
+        resources:
+          - apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: example-memcached
+            status:
+              readyReplicas: 4
+        status:
+          scorecard_function_length:
+            nodes: 4
+    - spec:
+        size: 2
+      expected:
+        resources:
+          - apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: example-memcached
+            status:
+              readyReplicas: 2
+        status:
+          scorecard_function_length:
+            nodes: 2
