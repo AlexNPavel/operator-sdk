@@ -415,13 +415,11 @@ func checkStatus(status map[string]interface{}, obj *unstructured.Unstructured) 
 func (t *SimpleScorecardTest) Run(goctx context.Context) *scorecard.TestResult {
 	res := &scorecard.TestResult{Test: t}
 	userDefinedTests := []UserDefinedTest{}
-	fmt.Printf("\n%s\n", t.Config)
 	err := yaml.Unmarshal(t.Config, &userDefinedTests)
 	if err != nil {
 		res.Errors = append(res.Errors, fmt.Errorf("failed to read config file"))
 		return res
 	}
-	fmt.Printf("\nConfig %+v\n", userDefinedTests)
 	for _, test := range userDefinedTests {
 		ctx := framework.NewTestCtx(nil)
 		err := ctx.InitializeClusterResources(&framework.CleanupOptions{TestContext: ctx, Timeout: time.Second * 10, RetryInterval: time.Second * 1})

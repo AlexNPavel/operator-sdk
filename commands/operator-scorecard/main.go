@@ -23,15 +23,15 @@ import (
 	"os"
 	"time"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
+	"github.com/operator-framework/operator-sdk/commands/operator-scorecard/lib"
+	"github.com/operator-framework/operator-sdk/internal/util/yamlutil"
 	"github.com/operator-framework/operator-sdk/pkg/scaffold"
+	framework "github.com/operator-framework/operator-sdk/pkg/test"
 	"github.com/operator-framework/operator-sdk/test/test-framework/pkg/apis"
 
-	"github.com/operator-framework/operator-sdk/internal/util/yamlutil"
-
-	"github.com/operator-framework/operator-sdk/commands/operator-scorecard/lib"
-	framework "github.com/operator-framework/operator-sdk/pkg/test"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/yaml"
 )
 
 var (
@@ -41,6 +41,57 @@ var (
 	namespacedPath string
 	globalPath     string
 )
+
+func getCRDGVKs(yamlFile []byte) ([]schema.GroupVersionKind, error) {
+	var gvks []schema.GroupVersionKind
+
+	scanner := yamlutil.NewYAMLScanner(yamlFile)
+	for scanner.Scan() {
+		yamlSpec := scanner.Bytes()
+
+		obj := &unstructured.Unstructured{}
+		jsonSpec, err := yaml.YAMLToJSON(yamlSpec)
+		if err != nil {
+			return nil, fmt.Errorf("could not convert yaml file to json: %v", err)
+		}
+		if err := obj.UnmarshalJSON(jsonSpec); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal object spec: (%v)", err)
+		}
+		if obj.GetKind() != "CustomResourceDefinition" {
+			continue
+		}
+		spec, ok := obj.Object["spec"].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("could not get spec for CRD %s", obj.GetName())
+		}
+		version, ok := spec["version"].(string)
+		if !ok || version == "" {
+			versions, ok := spec["versions"].([]string)
+			if !ok {
+				return nil, fmt.Errorf("could not get version for CRD %s", obj.GetName())
+			}
+			if len(versions) == 0 {
+				return nil, fmt.Errorf("could not get versions for CRD %s", obj.GetName())
+
+			}
+			version = versions[0]
+		}
+		names, ok := spec["names"].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("could not get names for CRD %s", obj.GetName())
+		}
+		kind, ok := names["kind"].(string)
+		if !ok {
+			return nil, fmt.Errorf("could not get kind for CRD %s", obj.GetName())
+		}
+		group, ok := spec["group"].(string)
+		if !ok {
+			return nil, fmt.Errorf("could not get group for CRD %s", obj.GetName())
+		}
+		gvks = append(gvks, schema.GroupVersionKind{Group: group, Version: version, Kind: kind})
+	}
+	return gvks, nil
+}
 
 func main() {
 	flag.StringVar(&configPath, "config", "", "path to config file")
@@ -89,12 +140,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not create global resources: %v", err)
 	}
-	memcachedList := &unstructured.UnstructuredList{}
-	memcachedList.SetAPIVersion("cache.example.com/v1alpha1")
-	memcachedList.SetKind("Memcached")
-	err = framework.AddToFrameworkScheme(apis.AddToScheme, memcachedList)
+	gvks, err := getCRDGVKs(gManifestBytes)
 	if err != nil {
-		log.Fatalf("Failed to add custom resource scheme to framework: %v", err)
+		log.Fatalf("%v", err)
+	}
+	for _, gvk := range gvks {
+		objList := &unstructured.UnstructuredList{}
+		objList.SetGroupVersionKind(gvk)
+		err = framework.AddToFrameworkScheme(apis.AddToScheme, objList)
+		if err != nil {
+			log.Fatalf("Failed to add custom resource scheme to framework: %v", err)
+		}
 	}
 	test := lib.NewSimpleScorecardTest(lib.SimpleScorecardTestConfig{Config: yamlSpecs})
 	results := test.Run(context.TODO())
