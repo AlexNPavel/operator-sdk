@@ -29,6 +29,7 @@ func (t *CheckSpecTest) Run(ctx context.Context) *TestResult {
 	err := t.Client.Get(ctx, types.NamespacedName{Namespace: t.CR.GetNamespace(), Name: t.CR.GetName()}, t.CR)
 	if err != nil {
 		res.Errors = append(res.Errors, fmt.Errorf("error getting custom resource: %v", err))
+		res.State = ErrorState
 		return res
 	}
 	if t.CR.Object["spec"] != nil {
@@ -46,6 +47,7 @@ func (t *CheckStatusTest) Run(ctx context.Context) *TestResult {
 	err := t.Client.Get(ctx, types.NamespacedName{Namespace: t.CR.GetNamespace(), Name: t.CR.GetName()}, t.CR)
 	if err != nil {
 		res.Errors = append(res.Errors, fmt.Errorf("error getting custom resource: %v", err))
+		res.State = ErrorState
 		return res
 	}
 	if t.CR.Object["status"] != nil {
@@ -63,6 +65,7 @@ func (t *WritingIntoCRsHasEffectTest) Run(ctx context.Context) *TestResult {
 	logs, err := getProxyLogs(t.ProxyPod)
 	if err != nil {
 		res.Errors = append(res.Errors, fmt.Errorf("error getting proxy logs: %v", err))
+		res.State = ErrorState
 		return res
 	}
 	msgMap := make(map[string]interface{})

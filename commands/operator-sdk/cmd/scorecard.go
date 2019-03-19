@@ -44,6 +44,7 @@ type scorecardConfig struct {
 	proxyPullPolicy    string
 	crdsDir            string
 	verbose            bool
+	outputFormat       string
 }
 
 var scConf scorecardConfig
@@ -73,6 +74,7 @@ func NewScorecardCmd() *cobra.Command {
 	scorecardCmd.Flags().StringVar(&scConf.proxyPullPolicy, scorecard.ProxyPullPolicyOpt, "Always", "Pull policy for scorecard proxy image")
 	scorecardCmd.Flags().StringVar(&scConf.crdsDir, "crds-dir", scaffold.CRDsDir, "Directory containing CRDs (all CRD manifest filenames must have the suffix 'crd.yaml')")
 	scorecardCmd.Flags().BoolVar(&scConf.verbose, scorecard.VerboseOpt, false, "Enable verbose logging")
+	scorecardCmd.Flags().StringVar(&scConf.outputFormat, scorecard.OutputFormatOpt, "human-readable", "Result output format. Possible value: human-readable, json")
 
 	if err := viper.BindPFlags(scorecardCmd.Flags()); err != nil {
 		log.Fatalf("Failed to bind scorecard flags to viper: %v", err)

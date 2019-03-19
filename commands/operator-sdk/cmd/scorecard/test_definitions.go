@@ -33,8 +33,25 @@ type Test interface {
 	Run(context.Context) *TestResult
 }
 
+// State is a type used to indicate the result state of a Test.
+type State string
+
+const (
+	// UnsetState is the default state for a TestResult. It must be updated by UpdateState or by the Test.
+	UnsetState State = "unset"
+	// PassState occurs when a Test's ExpectedPoints == MaximumPoints.
+	PassState State = "pass"
+	// PartialPassState occurs when a Test's ExpectedPoints < MaximumPoints and ExpectedPoints > 0.
+	PartialPassState State = "partial_pass"
+	// FailState occurs when a Test's ExpectedPoints == 0.
+	FailState State = "fail"
+	// ErrorState occurs when a Test encounters a fatal error and the reported points should not be considered.
+	ErrorState State = "error"
+)
+
 // TestResult contains a test's points, suggestions, and errors
 type TestResult struct {
+	State         State
 	Test          Test
 	EarnedPoints  int
 	MaximumPoints int
@@ -82,6 +99,27 @@ type TestSuite struct {
 	Tests       []Test
 	TestResults []*TestResult
 	Weights     map[string]float64
+}
+
+// JSONOut is the struct defining the JSON output of the scorecard tests.
+type JSONOut struct {
+	Error       int               `json:"error"`
+	Pass        int               `json:"pass"`
+	PartialPass int               `json:"partial_pass"`
+	Fail        int               `json:"fail"`
+	TotalScore  int               `json:"total_score"`
+	Tests       []*JSONTestResult `json:"tests"`
+}
+
+// JSONTestResult is a simplified version of the TestResult that only include the Name and Description of the Test field in TestResult
+type JSONTestResult struct {
+	State         State
+	Name          string
+	Description   string
+	EarnedPoints  int
+	MaximumPoints int
+	Suggestions   []string
+	Errors        []error
 }
 
 // Test definitions
@@ -321,4 +359,58 @@ func NewTestSuite(name, description string) *TestSuite {
 		},
 		Weights: make(map[string]float64),
 	}
+}
+
+// UpdateState updates the state of a TestResult.
+func (res *TestResult) UpdateState() {
+	if res.State == ErrorState {
+		return
+	}
+	if res.EarnedPoints == 0 {
+		res.State = FailState
+	} else if res.EarnedPoints < res.MaximumPoints {
+		res.State = PartialPassState
+	} else if res.EarnedPoints == res.MaximumPoints {
+		res.State = PassState
+	}
+	// TODO: decide what to do if a Test incorrectly sets points (Earned > Max)
+}
+
+// CalculateStates updates the state fields of the JSONOut based on the TestResults in out.Tests
+func (out *JSONOut) CalculateStates() {
+	out.Error = 0
+	out.Pass = 0
+	out.PartialPass = 0
+	out.Fail = 0
+	for _, test := range out.Tests {
+		switch test.State {
+		case ErrorState:
+			out.Error++
+		case PassState:
+			out.Pass++
+		case PartialPassState:
+			out.PartialPass++
+		case FailState:
+			out.Fail++
+		}
+	}
+}
+
+// TestResultToJSONTestResult is a helper function for converting from the TestResult type to the JSONTestResult type
+func TestResultToJSONTestResult(tr *TestResult) *JSONTestResult {
+	jtr := JSONTestResult{}
+	jtr.State = tr.State
+	jtr.Name = tr.Test.GetName()
+	jtr.Description = tr.Test.GetDescription()
+	jtr.EarnedPoints = tr.EarnedPoints
+	jtr.MaximumPoints = tr.MaximumPoints
+	jtr.Suggestions = tr.Suggestions
+	jtr.Errors = tr.Errors
+	if jtr.Suggestions == nil {
+		jtr.Suggestions = []string{}
+	}
+	if jtr.Errors == nil {
+		jtr.Errors = []error{}
+	}
+	return &jtr
 }
