@@ -107,7 +107,8 @@ type JSONOut struct {
 	Pass        int               `json:"pass"`
 	PartialPass int               `json:"partial_pass"`
 	Fail        int               `json:"fail"`
-	TotalScore  int               `json:"total_score"`
+	TotalTests  int               `json:"total_tests"`
+	TotalScore  int               `json:"total_score_percent"`
 	Tests       []*JSONTestResult `json:"tests"`
 }
 
@@ -382,7 +383,9 @@ func (out *JSONOut) CalculateStates() {
 	out.Pass = 0
 	out.PartialPass = 0
 	out.Fail = 0
+	out.TotalTests = 0
 	for _, test := range out.Tests {
+		out.TotalTests++
 		switch test.State {
 		case ErrorState:
 			out.Error++

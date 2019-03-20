@@ -364,7 +364,9 @@ func initConfig() error {
 			log.Info("Using config file: ", viper.ConfigFileUsed())
 		}
 	} else {
-		log.Warn("Could not load config file; using flags")
+		if viper.GetString(OutputFormatOpt) != "json" {
+			log.Warn("Could not load config file; using flags")
+		}
 	}
 	return nil
 }
